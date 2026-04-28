@@ -16,15 +16,153 @@
 */
 
 use bevy::prelude::*;
+use crossflow::CrossflowPlugin;
+use futures::Future;
+use rclrs::{
+    ActionClientState, ActionIDL, ActionServerState, Context, CreateBasicExecutor,
+    ExecutorCommands, IntoPrimitiveOptions, MessageIDL, NodeState, RequestedGoal,
+    RequestedGoalClient, SpinOptions, Subscription, TerminatedGoal,
+};
+use std::{
+    fmt::Debug,
+    sync::{Arc, Mutex},
+    thread,
+};
 
-pub mod subscription;
-pub use subscription::*;
+pub mod navigate_to_pose;
+pub use navigate_to_pose::*;
+
+pub mod safe_zone;
+pub use safe_zone::*;
 
 #[derive(Default)]
 pub struct Nav2TrafficPlugin {}
 
 impl Plugin for Nav2TrafficPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(RclrsPlugin);
+        app.add_plugins((CrossflowPlugin::default(), RclrsPlugin::default()));
+        app.insert_resource(RosNamespace("robot_1".to_string()))
+            .init_resource::<RclrsNode>();
+
+        app.add_plugins((
+            NavigateToPosePlugin::default(),
+            SafeZoneSubscriptionPlugin::default(),
+        ));
+    }
+}
+
+#[derive(Resource, Deref)]
+pub struct RclrsExecutorCommands(Arc<ExecutorCommands>);
+
+#[derive(Default)]
+pub(crate) struct RclrsPlugin {}
+
+impl Plugin for RclrsPlugin {
+    fn build(&self, app: &mut App) {
+        let mut executor = Context::default_from_env().unwrap().create_basic_executor();
+        app.insert_resource(RclrsExecutorCommands(Arc::clone(executor.commands())));
+
+        thread::spawn(move || {
+            let r = executor.spin(SpinOptions::default());
+            for err in r {
+                error!("An error occurred in rclrs: {err}");
+            }
+        });
+    }
+}
+
+#[derive(Resource, Deref)]
+pub struct RclrsNode(Arc<NodeState>);
+
+#[derive(Resource, Debug)]
+pub struct RosNamespace(pub String);
+
+impl FromWorld for RclrsNode {
+    fn from_world(world: &mut World) -> Self {
+        let namespace = world.resource::<RosNamespace>().0.clone();
+        let executor_commands = world.resource::<RclrsExecutorCommands>();
+
+        let node_name = namespace + "_nav2_traffic_node";
+        let node = executor_commands.create_node(&node_name).unwrap();
+        RclrsNode(node.clone())
+    }
+}
+
+// Template for creating ROS 2 subscribers
+pub struct RosSubscription<T: MessageIDL + Debug> {
+    _subscriber: Arc<Subscription<T>>,
+    data: Arc<Mutex<Option<T>>>,
+}
+
+impl<T: MessageIDL + Debug> RosSubscription<T> {
+    pub fn new(node: &Arc<NodeState>, topic: String) -> Self {
+        let data = Arc::new(Mutex::new(None));
+        let data_clone: Arc<Mutex<Option<T>>> = Arc::clone(&data);
+
+        let subscriber = node
+            .create_subscription(
+                topic.clone().reliable().transient_local().keep_all(),
+                move |msg: T| {
+                    println!("Received a message on [{}]: {:?}", topic, msg);
+                    *data_clone.lock().unwrap() = Some(msg.clone());
+
+                    // TODO(@xiyuoh) allow customized qos
+                },
+            )
+            .unwrap();
+
+        Self {
+            _subscriber: Arc::new(subscriber),
+            data,
+        }
+    }
+
+    pub fn data_callback(&self) -> Option<T> {
+        self.data.lock().unwrap().as_ref().cloned()
+    }
+}
+
+// Template for creating ROS 2 action clients
+pub struct RosActionClient<T: ActionIDL> {
+    action_client: Arc<ActionClientState<T>>,
+    action_name: String,
+}
+
+impl<T: ActionIDL> RosActionClient<T> {
+    pub fn new(node: &Arc<NodeState>, action_name: String) -> Self {
+        let action_client = node.create_action_client::<T>(&action_name).unwrap();
+
+        Self {
+            action_client,
+            action_name,
+        }
+    }
+
+    pub fn request_goal(&self, goal: T::Goal) -> RequestedGoalClient<T> {
+        self.action_client.request_goal(goal)
+    }
+}
+
+// Template for creating ROS 2 action servers
+pub struct RosActionServer<A: ActionIDL> {
+    action_server: Arc<ActionServerState<A>>,
+    action_name: String,
+}
+
+impl<A: ActionIDL> RosActionServer<A> {
+    pub fn new<Task>(
+        node: &Arc<NodeState>,
+        action_name: String,
+        callback: impl FnMut(RequestedGoal<A>) -> Task + Send + Sync + 'static,
+    ) -> Self
+    where
+        Task: Future<Output = TerminatedGoal> + Send + Sync + 'static,
+    {
+        let action_server = node.create_action_server(&action_name, callback).unwrap();
+
+        Self {
+            action_server,
+            action_name,
+        }
     }
 }
