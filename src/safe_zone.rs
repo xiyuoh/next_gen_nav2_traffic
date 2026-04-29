@@ -1,4 +1,6 @@
-use crate::{AgentName, NavigationTarget, RclrsNode, RosSubscription};
+use crate::{
+    inner_navigation_client::InnerNavigationTarget, AgentName, RclrsNode, RosSubscription,
+};
 use bevy::prelude::*;
 use rmf_prototype_msgs::msg::{Region, SafeZone};
 use std::sync::Arc;
@@ -31,11 +33,11 @@ pub struct SafeZoneSubscriptionPlugin {}
 impl Plugin for SafeZoneSubscriptionPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(PreUpdate, update_incremental_target)
-            .add_observer(subscribe_on_new_agent);
+            .add_observer(create_safe_zone_subscriber);
     }
 }
 
-fn subscribe_on_new_agent(
+fn create_safe_zone_subscriber(
     trigger: Trigger<OnAdd, AgentName>,
     mut commands: Commands,
     agent_names: Query<&AgentName>,
@@ -56,7 +58,7 @@ fn subscribe_on_new_agent(
 }
 
 fn update_incremental_target(
-    mut nav_target: EventWriter<NavigationTarget>,
+    mut nav_target: EventWriter<InnerNavigationTarget>,
     mut subscriptions: Query<(
         Entity,
         &SafeZoneSubscription,
@@ -76,9 +78,9 @@ fn update_incremental_target(
         };
 
         *current_safe_zone = CurrentSafeZone(Some(safe_zone.clone()));
-        nav_target.write(NavigationTarget::new(
+        nav_target.write(InnerNavigationTarget::new(
             e,
-            safe_zone.id.plan_id,
+            safe_zone.id,
             target_x as f64,
             target_y as f64,
             target_yaw as f64,

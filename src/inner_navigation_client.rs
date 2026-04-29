@@ -6,24 +6,24 @@ use geometry_msgs::msg::{Point, PoseStamped, Quaternion};
 use nalgebra::UnitQuaternion;
 use nav2_msgs::action::{NavigateToPose, NavigateToPose_Goal};
 use rclrs::*;
-use rmf_prototype_msgs::msg::PlanId;
+use rmf_prototype_msgs::msg::SafeZoneId;
 use std::{future::Future, sync::Arc};
 use thiserror::Error;
 
 #[derive(Clone, Debug, Event)]
-pub struct NavigationTarget {
+pub struct InnerNavigationTarget {
     agent: Entity,
-    id: PlanId,
+    safe_zone_id: SafeZoneId,
     x: f64,
     y: f64,
     yaw: f64,
 }
 
-impl NavigationTarget {
-    pub fn new(agent: Entity, id: PlanId, x: f64, y: f64, yaw: f64) -> Self {
+impl InnerNavigationTarget {
+    pub fn new(agent: Entity, safe_zone_id: SafeZoneId, x: f64, y: f64, yaw: f64) -> Self {
         Self {
             agent,
-            id,
+            safe_zone_id,
             x,
             y,
             yaw,
@@ -32,14 +32,14 @@ impl NavigationTarget {
 }
 
 #[derive(Component, Clone)]
-pub struct InnerNavigateToPoseClient {
+pub struct InnerNavigationClient {
     // Stores the action client object
     pub action_client: Arc<RosActionClient<NavigateToPose>>,
-    // Whether there is an ongoing action goal
+    // The ongoing action goal client (if any)
     pub goal_client: Option<GoalClient<NavigateToPose>>,
 }
 
-impl InnerNavigateToPoseClient {
+impl InnerNavigationClient {
     pub fn goal_client(&self) -> &Option<GoalClient<NavigateToPose>> {
         &self.goal_client
     }
@@ -54,19 +54,19 @@ impl InnerNavigateToPoseClient {
 }
 
 #[derive(Default)]
-pub struct NavigateToPoseClientPlugin {}
+pub struct InnerNavigationClientPlugin {}
 
-impl Plugin for NavigateToPoseClientPlugin {
+impl Plugin for InnerNavigationClientPlugin {
     fn build(&self, app: &mut App) {
-        app.add_event::<NavigationTarget>()
-            .add_observer(initialize_new_inner_navigation_client);
+        app.add_event::<InnerNavigationTarget>()
+            .add_observer(create_inner_navigation_client);
 
         // Initialize Navigation services
-        let navigation_services = NavigationServices::from_app(app);
+        let navigation_services = InnerNavigationServices::from_app(app);
         app.insert_resource(navigation_services);
         let await_and_send_goal = app
             .world()
-            .resource::<NavigationServices>()
+            .resource::<InnerNavigationServices>()
             .await_and_send_goal
             .clone();
 
@@ -76,7 +76,7 @@ impl Plugin for NavigateToPoseClientPlugin {
     }
 }
 
-fn initialize_new_inner_navigation_client(
+fn create_inner_navigation_client(
     trigger: Trigger<OnAdd, AgentName>,
     mut commands: Commands,
     agent_names: Query<&AgentName>,
@@ -90,46 +90,44 @@ fn initialize_new_inner_navigation_client(
     // Set up client for the inner Nav2 action
     let inner_action_client = RosActionClient::<NavigateToPose>::new(&node, action_name);
 
-    commands.entity(e).insert(InnerNavigateToPoseClient {
+    commands.entity(e).insert(InnerNavigationClient {
         action_client: Arc::new(inner_action_client),
         goal_client: None,
     });
 }
 
 #[derive(Clone)]
-struct PendingNavigationRequest {
+struct InnerNavigationRequest {
     agent: Entity,
-    plan_id: PlanId,
+    safe_zone_id: SafeZoneId,
     target_pose: PoseStamped,
 }
 
 #[derive(Clone)]
-struct NavigationRequest {
-    agent: Entity,
-    plan_id: PlanId,
-    target_pose: PoseStamped,
+struct CurrentInnerNavigationGoal {
+    request: InnerNavigationRequest,
     goal_client: GoalClient<NavigateToPose>,
 }
 
 #[derive(Clone)]
-struct NavigationCancelRequest {
-    request: PendingNavigationRequest,
+struct CancelInnerNavigation {
+    request: InnerNavigationRequest,
     cancel_client: GoalClient<NavigateToPose>,
 }
 
 #[derive(Clone)]
-struct NavigationSuccess {
-    pub request: NavigationRequest,
+struct InnerNavigationSuccess {
+    pub handle: CurrentInnerNavigationGoal,
 }
 
 #[derive(Clone)]
-struct NavigationError {
-    pub request: Option<NavigationRequest>,
-    pub kind: NavigationErrorKind,
+struct InnerNavigationError {
+    pub handle: Option<CurrentInnerNavigationGoal>,
+    pub kind: InnerNavigationErrorKind,
 }
 
 #[derive(Clone, Debug, Error)]
-enum NavigationErrorKind {
+enum InnerNavigationErrorKind {
     #[error("Error!")]
     DefaultError,
     #[error("Failed to cancel current goal!")]
@@ -142,29 +140,28 @@ enum NavigationErrorKind {
     UnknownError,
 }
 
-type NavigationResult = Result<NavigationSuccess, NavigationError>;
+type InnerNavigationResult = Result<InnerNavigationSuccess, InnerNavigationError>;
 
 #[derive(Resource)]
-pub struct NavigationServices {
+pub struct InnerNavigationServices {
     await_and_send_goal: Service<(), (), ()>,
 }
 
-impl NavigationServices {
+impl InnerNavigationServices {
     pub fn from_app(app: &mut App) -> Self {
-        let await_new_nav_requests_service =
-            app.spawn_continuous_service(Update, await_new_nav_requests);
+        let await_new_requests_service = app.spawn_continuous_service(Update, await_new_requests);
         let check_existing_goal_service = app.spawn_service(check_existing_goal);
         let async_cancel_goal_service = app.spawn_service(async_cancel_goal);
         let async_request_new_goal_service = app.spawn_service(async_request_new_goal);
         let update_goal_client_service = app.spawn_service(update_goal_client);
-        let async_monitor_new_navigation_request_service =
-            app.spawn_service(async_monitor_new_navigation_request);
+        let async_monitor_ongoing_navigation_service =
+            app.spawn_service(async_monitor_ongoing_navigation);
         let cleanup_goal_client_service = app.spawn_service(cleanup_goal_client);
 
         let await_and_send_goal = app.world_mut().spawn_workflow(|scope, builder| {
-            let await_requests_node = builder
+            let await_requests = builder
                 .chain(scope.start)
-                .then_node(await_new_nav_requests_service);
+                .then_node(await_new_requests_service);
 
             // Create nodes
             let check_existing_goal = builder.create_node(check_existing_goal_service);
@@ -172,11 +169,11 @@ impl NavigationServices {
             let async_request_new_goal = builder.create_node(async_request_new_goal_service);
             let update_goal_client = builder.create_node(update_goal_client_service);
             let async_monitor_new_navigation_request =
-                builder.create_node(async_monitor_new_navigation_request_service);
+                builder.create_node(async_monitor_ongoing_navigation_service);
             let cleanup_goal_client = builder.create_node(cleanup_goal_client_service);
 
             // Stream out new requests to downstream nodes
-            builder.connect(await_requests_node.streams, check_existing_goal.input);
+            builder.connect(await_requests.streams, check_existing_goal.input);
 
             // Check if there is an existing goal client; if so, connect to
             // cancellation node, else request new goal
@@ -192,9 +189,9 @@ impl NavigationServices {
             let (cancel_goal_fork_result_input, cancel_goal_fork_result) =
                 builder.create_fork_result();
             builder.connect(async_cancel_goal.output, cancel_goal_fork_result_input);
-            let trim = builder.create_trim::<PendingNavigationRequest>(Some(
-                TrimBranch::downstream(async_request_new_goal.input),
-            ));
+            let trim = builder.create_trim::<InnerNavigationRequest>(Some(TrimBranch::downstream(
+                async_request_new_goal.input,
+            )));
             // If current goal successfully canceled, trim any downstream nodes
             builder.connect(cancel_goal_fork_result.ok, trim.input);
             builder.connect(trim.output, async_request_new_goal.input);
@@ -215,7 +212,7 @@ impl NavigationServices {
             );
 
             // Connect only await_requests output to terminate
-            builder.connect(await_requests_node.output, scope.terminate);
+            builder.connect(await_requests.output, scope.terminate);
         });
 
         Self {
@@ -224,10 +221,10 @@ impl NavigationServices {
     }
 }
 
-fn await_new_nav_requests(
-    srv: ContinuousService<(), (), StreamOf<PendingNavigationRequest>>,
-    mut orders: ContinuousQuery<(), (), StreamOf<PendingNavigationRequest>>,
-    mut nav_target: EventReader<NavigationTarget>,
+fn await_new_requests(
+    srv: ContinuousService<(), (), StreamOf<InnerNavigationRequest>>,
+    mut orders: ContinuousQuery<(), (), StreamOf<InnerNavigationRequest>>,
+    mut nav_target: EventReader<InnerNavigationTarget>,
     node: Res<RclrsNode>,
 ) {
     let Some(mut orders) = orders.get_mut(&srv.key) else {
@@ -266,9 +263,9 @@ fn await_new_nav_requests(
                 },
             },
         };
-        let pending_request = PendingNavigationRequest {
+        let pending_request = InnerNavigationRequest {
             agent: target.agent,
-            plan_id: target.id.clone(),
+            safe_zone_id: target.safe_zone_id.clone(),
             target_pose: goal_pose,
         };
 
@@ -277,15 +274,15 @@ fn await_new_nav_requests(
 }
 
 fn check_existing_goal(
-    Blocking { request, .. }: Blocking<PendingNavigationRequest>,
-    inner_nav_clients: Query<&InnerNavigateToPoseClient>,
-) -> Result<NavigationCancelRequest, PendingNavigationRequest> {
+    Blocking { request, .. }: Blocking<InnerNavigationRequest>,
+    inner_nav_clients: Query<&InnerNavigationClient>,
+) -> Result<CancelInnerNavigation, InnerNavigationRequest> {
     if let Some(existing_goal) = inner_nav_clients
         .get(request.agent)
         .ok()
         .and_then(|inner_action_client| inner_action_client.goal_client.clone())
     {
-        return Ok(NavigationCancelRequest {
+        return Ok(CancelInnerNavigation {
             request,
             cancel_client: existing_goal.clone(),
         });
@@ -294,38 +291,38 @@ fn check_existing_goal(
 }
 
 fn async_cancel_goal(
-    Async { request, .. }: Async<NavigationCancelRequest>,
+    Async { request, .. }: Async<CancelInnerNavigation>,
     executor_commands: Res<RclrsExecutorCommands>,
-) -> impl Future<Output = Result<PendingNavigationRequest, NavigationError>> {
+) -> impl Future<Output = Result<InnerNavigationRequest, InnerNavigationError>> {
     executor_commands
         .run(async move {
             let cancellation = request.cancel_client.cancellation.cancel().await;
             if cancellation.is_accepted() {
                 return Ok(request.request);
             }
-            Err(NavigationError {
-                request: None,
-                kind: NavigationErrorKind::CancelGoalError,
+            Err(InnerNavigationError {
+                handle: None,
+                kind: InnerNavigationErrorKind::CancelGoalError,
             })
         })
         .then(|res| async move {
-            res.unwrap_or(Err(NavigationError {
-                request: None,
-                kind: NavigationErrorKind::CancelGoalError,
+            res.unwrap_or(Err(InnerNavigationError {
+                handle: None,
+                kind: InnerNavigationErrorKind::CancelGoalError,
             }))
         })
 }
 
 fn async_request_new_goal(
-    Async { request, .. }: Async<PendingNavigationRequest>,
-    mut inner_nav_clients: Query<&mut InnerNavigateToPoseClient>,
+    Async { request, .. }: Async<InnerNavigationRequest>,
+    mut inner_nav_clients: Query<&mut InnerNavigationClient>,
     executor_commands: Res<RclrsExecutorCommands>,
-) -> impl Future<Output = Result<NavigationRequest, NavigationError>> {
+) -> impl Future<Output = Result<CurrentInnerNavigationGoal, InnerNavigationError>> {
     let inner_nav_client_result = inner_nav_clients.get_mut(request.agent);
     if inner_nav_client_result.is_err() {
-        return std::future::ready(Err(NavigationError {
-            request: None,
-            kind: NavigationErrorKind::RequestGoalError,
+        return std::future::ready(Err(InnerNavigationError {
+            handle: None,
+            kind: InnerNavigationErrorKind::RequestGoalError,
         }))
         .left_future();
     }
@@ -344,50 +341,52 @@ fn async_request_new_goal(
     executor_commands
         .run(async move {
             match nav_request.await {
-                Some(handle) => Ok(NavigationRequest {
-                    agent: request.agent,
-                    plan_id: request.plan_id.clone(),
-                    target_pose: request.target_pose,
+                Some(handle) => Ok(CurrentInnerNavigationGoal {
+                    request,
                     goal_client: handle,
                 }),
-                None => Err(NavigationError {
-                    request: None,
-                    kind: NavigationErrorKind::RequestGoalError,
+                None => Err(InnerNavigationError {
+                    handle: None,
+                    kind: InnerNavigationErrorKind::RequestGoalError,
                 }),
             }
         })
         .then(|res| async move {
-            res.unwrap_or(Err(NavigationError {
-                request: None,
-                kind: NavigationErrorKind::RequestGoalError,
+            res.unwrap_or(Err(InnerNavigationError {
+                handle: None,
+                kind: InnerNavigationErrorKind::RequestGoalError,
             }))
         })
         .right_future()
 }
 
 fn update_goal_client(
-    Blocking { request, .. }: Blocking<NavigationRequest>,
-    mut inner_nav_clients: Query<&mut InnerNavigateToPoseClient>,
-) -> NavigationRequest {
-    if let Ok(mut inner_nav_client) = inner_nav_clients.get_mut(request.agent) {
-        *inner_nav_client.goal_client_mut() = Some(request.goal_client.clone());
+    Blocking {
+        request: handle, ..
+    }: Blocking<CurrentInnerNavigationGoal>,
+    mut inner_nav_clients: Query<&mut InnerNavigationClient>,
+) -> CurrentInnerNavigationGoal {
+    if let Ok(mut inner_nav_client) = inner_nav_clients.get_mut(handle.request.agent) {
+        *inner_nav_client.goal_client_mut() = Some(handle.goal_client.clone());
     } else {
         println!(
-            "[warning] InnerNavigateToPoseClient not found for agent [{:?}]!",
-            request.agent.index()
+            "[warning] InnerNavigationClient not found for agent [{:?}]!",
+            handle.request.agent.index()
         );
     }
-    request
+    handle
 }
 
-fn async_monitor_new_navigation_request(
-    Async { request, .. }: Async<NavigationRequest>,
+fn async_monitor_ongoing_navigation(
+    Async {
+        request: handle, ..
+    }: Async<CurrentInnerNavigationGoal>,
     executor_commands: Res<RclrsExecutorCommands>,
-) -> impl Future<Output = NavigationResult> {
-    let nav_request = request.clone();
+) -> impl Future<Output = InnerNavigationResult> {
+    let nav_handle = handle.clone();
     executor_commands
         .run(async move {
-            let mut goal_client_stream = request.goal_client.clone().stream();
+            let mut goal_client_stream = handle.goal_client.clone().stream();
             // TODO(@xiyuoh) this gets stuck sometimes, find out why
             while let Some(event) = goal_client_stream.next().await {
                 match event {
@@ -400,11 +399,13 @@ fn async_monitor_new_navigation_request(
                     GoalEvent::Result((status, result)) => {
                         println!("[result] Received result: {:?}", result);
                         match status {
-                            GoalStatusCode::Succeeded => return Ok(NavigationSuccess { request }),
+                            GoalStatusCode::Succeeded => {
+                                return Ok(InnerNavigationSuccess { handle })
+                            }
                             GoalStatusCode::Aborted | GoalStatusCode::Cancelled => {
-                                return Err(NavigationError {
-                                    request: Some(request.clone()),
-                                    kind: NavigationErrorKind::GoalAbortedError,
+                                return Err(InnerNavigationError {
+                                    handle: Some(handle.clone()),
+                                    kind: InnerNavigationErrorKind::GoalAbortedError,
                                 })
                             }
                             _ => {}
@@ -412,15 +413,15 @@ fn async_monitor_new_navigation_request(
                     }
                 }
             }
-            Err(NavigationError {
-                request: Some(request.clone()),
-                kind: NavigationErrorKind::UnknownError,
+            Err(InnerNavigationError {
+                handle: Some(handle.clone()),
+                kind: InnerNavigationErrorKind::UnknownError,
             })
         })
         .then(|res| async move {
-            res.unwrap_or(Err(NavigationError {
-                request: Some(nav_request.clone()),
-                kind: NavigationErrorKind::UnknownError,
+            res.unwrap_or(Err(InnerNavigationError {
+                handle: Some(nav_handle.clone()),
+                kind: InnerNavigationErrorKind::UnknownError,
             }))
         })
 }
@@ -428,13 +429,13 @@ fn async_monitor_new_navigation_request(
 fn cleanup_goal_client(
     Blocking {
         request: result, ..
-    }: Blocking<NavigationResult>,
-    mut inner_nav_clients: Query<&mut InnerNavigateToPoseClient>,
+    }: Blocking<InnerNavigationResult>,
+    mut inner_nav_clients: Query<&mut InnerNavigationClient>,
 ) {
-    let request = match result {
-        Ok(res) => res.request,
+    let handle = match result {
+        Ok(res) => res.handle,
         Err(err) => {
-            let Some(req) = err.request else {
+            let Some(req) = err.handle else {
                 return;
             };
             req
@@ -442,12 +443,12 @@ fn cleanup_goal_client(
     };
 
     // Clear inner goal client
-    if let Ok(mut inner_nav_client) = inner_nav_clients.get_mut(request.agent) {
+    if let Ok(mut inner_nav_client) = inner_nav_clients.get_mut(handle.request.agent) {
         inner_nav_client.reset_goal_client();
     } else {
         println!(
-            "[warning] InnerNavigateToPoseClient not found for agent [{:?}]!",
-            request.agent.index()
+            "[warning] InnerNavigationClient not found for agent [{:?}]!",
+            handle.request.agent.index()
         );
     }
 }

@@ -20,8 +20,8 @@ use crossflow::CrossflowPlugin;
 use futures::Future;
 use rclrs::{
     ActionClientState, ActionIDL, ActionServerState, Context, CreateBasicExecutor,
-    ExecutorCommands, IntoPrimitiveOptions, MessageIDL, NodeState, RequestedGoal,
-    RequestedGoalClient, SpinOptions, Subscription, TerminatedGoal,
+    ExecutorCommands, IntoPrimitiveOptions, MessageIDL, NodeState, PublisherState, RclrsError,
+    RequestedGoal, RequestedGoalClient, SpinOptions, Subscription, TerminatedGoal,
 };
 use std::{
     fmt::Debug,
@@ -29,11 +29,14 @@ use std::{
     thread,
 };
 
-pub mod navigate_to_pose_client;
-pub use navigate_to_pose_client::*;
+pub mod destination;
+pub use destination::*;
 
-pub mod navigate_to_pose_server;
-pub use navigate_to_pose_server::*;
+pub mod inner_navigation_client;
+pub use inner_navigation_client::*;
+
+pub mod navigation_server;
+pub use navigation_server::*;
 
 pub mod safe_zone;
 pub use safe_zone::*;
@@ -46,9 +49,10 @@ impl Plugin for Nav2TrafficPlugin {
         app.add_plugins((CrossflowPlugin::default(), RclrsPlugin::default()))
             .init_resource::<RclrsNode>()
             .add_plugins((
+                DestinationGoalPublisherPlugin::default(),
                 SafeZoneSubscriptionPlugin::default(),
-                NavigateToPoseClientPlugin::default(),
-                NavigateToPoseServerPlugin::default(),
+                InnerNavigationClientPlugin::default(),
+                NavigationServerPlugin::default(),
             ));
 
         // Add plugin for each agent
@@ -139,6 +143,23 @@ impl<T: MessageIDL + Debug> RosSubscription<T> {
 
     pub fn data_callback(&self) -> Option<T> {
         self.data.lock().unwrap().as_ref().cloned()
+    }
+}
+
+// Template for creating ROS 2 publishers
+pub struct RosPublisher<T: MessageIDL + Debug> {
+    publisher: Arc<PublisherState<T>>,
+}
+
+impl<T: MessageIDL + Debug> RosPublisher<T> {
+    pub fn new(node: &Arc<NodeState>, topic: String) -> Self {
+        let publisher = node.create_publisher(&topic).unwrap();
+
+        Self { publisher }
+    }
+
+    pub fn publish(&self, msg: T) -> Result<(), RclrsError> {
+        self.publisher.publish(msg)
     }
 }
 

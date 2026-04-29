@@ -3447,9 +3447,10 @@ dependencies = [
  "rclrs",
  "rmf_prototype_msgs",
  "std_msgs",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
  "unique_identifier_msgs",
+ "uuid",
 ]
 
 [[package]]
