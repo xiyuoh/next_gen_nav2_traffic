@@ -29,8 +29,11 @@ use std::{
     thread,
 };
 
-pub mod navigate_to_pose;
-pub use navigate_to_pose::*;
+pub mod navigate_to_pose_client;
+pub use navigate_to_pose_client::*;
+
+pub mod navigate_to_pose_server;
+pub use navigate_to_pose_server::*;
 
 pub mod safe_zone;
 pub use safe_zone::*;
@@ -40,14 +43,48 @@ pub struct Nav2TrafficPlugin {}
 
 impl Plugin for Nav2TrafficPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((CrossflowPlugin::default(), RclrsPlugin::default()));
-        app.insert_resource(RosNamespace("robot_1".to_string()))
-            .init_resource::<RclrsNode>();
+        app.add_plugins((CrossflowPlugin::default(), RclrsPlugin::default()))
+            .init_resource::<RclrsNode>()
+            .add_plugins((
+                SafeZoneSubscriptionPlugin::default(),
+                NavigateToPoseClientPlugin::default(),
+                NavigateToPoseServerPlugin::default(),
+            ));
 
-        app.add_plugins((
-            NavigateToPosePlugin::default(),
-            SafeZoneSubscriptionPlugin::default(),
-        ));
+        // Add plugin for each agent
+        app.add_plugins(AgentNav2TrafficPlugin::new("robot_1".to_string()));
+    }
+}
+
+struct AgentNav2TrafficPlugin {
+    agent: String,
+}
+
+impl AgentNav2TrafficPlugin {
+    pub fn new(agent: String) -> Self {
+        Self { agent }
+    }
+}
+
+impl Plugin for AgentNav2TrafficPlugin {
+    fn build(&self, app: &mut App) {
+        // Spawn an entity with AgentName
+        app.world_mut().spawn(AgentName(self.agent.clone()));
+    }
+}
+
+#[derive(Component, Clone, Debug, Default)]
+pub struct AgentName(String);
+
+#[derive(Resource, Deref)]
+pub struct RclrsNode(Arc<NodeState>);
+
+impl FromWorld for RclrsNode {
+    fn from_world(world: &mut World) -> Self {
+        let executor_commands = world.resource::<RclrsExecutorCommands>();
+        let node_name = "nav_traffic_node".to_string();
+        let node = executor_commands.create_node(&node_name).unwrap();
+        RclrsNode(node.clone())
     }
 }
 
@@ -68,23 +105,6 @@ impl Plugin for RclrsPlugin {
                 error!("An error occurred in rclrs: {err}");
             }
         });
-    }
-}
-
-#[derive(Resource, Deref)]
-pub struct RclrsNode(Arc<NodeState>);
-
-#[derive(Resource, Debug)]
-pub struct RosNamespace(pub String);
-
-impl FromWorld for RclrsNode {
-    fn from_world(world: &mut World) -> Self {
-        let namespace = world.resource::<RosNamespace>().0.clone();
-        let executor_commands = world.resource::<RclrsExecutorCommands>();
-
-        let node_name = namespace + "_nav2_traffic_node";
-        let node = executor_commands.create_node(&node_name).unwrap();
-        RclrsNode(node.clone())
     }
 }
 

@@ -1,14 +1,14 @@
-use crate::{NavigationTarget, RclrsNode, RosNamespace, RosSubscription};
+use crate::{AgentName, NavigationTarget, RclrsNode, RosSubscription};
 use bevy::prelude::*;
 use rmf_prototype_msgs::msg::{Region, SafeZone};
 use std::sync::Arc;
 
-#[derive(Resource)]
+#[derive(Component)]
 pub struct SafeZoneSubscription {
     pub subscriber: Arc<RosSubscription<SafeZone>>,
 }
 
-#[derive(Resource, Default, Deref, DerefMut)]
+#[derive(Component, Debug, Clone, Default, Deref)]
 pub struct CurrentSafeZone(pub Option<SafeZone>);
 
 impl CurrentSafeZone {
@@ -30,46 +30,60 @@ pub struct SafeZoneSubscriptionPlugin {}
 
 impl Plugin for SafeZoneSubscriptionPlugin {
     fn build(&self, app: &mut App) {
-        let namespace = app.world().resource::<RosNamespace>().0.clone();
-        let node = app.world().resource::<RclrsNode>();
-        let subscription = Arc::new(RosSubscription::<SafeZone>::new(
-            &node,
-            namespace + "/plan/safe_zone",
-        ));
-        app.insert_resource(SafeZoneSubscription {
-            subscriber: Arc::clone(&subscription),
-        })
-        .insert_resource(CurrentSafeZone::default())
-        .add_systems(PreUpdate, update_incremental_target);
+        app.add_systems(PreUpdate, update_incremental_target)
+            .add_observer(subscribe_on_new_agent);
     }
 }
 
-fn update_incremental_target(
-    mut current_safe_zone: ResMut<CurrentSafeZone>,
-    mut nav_target: EventWriter<NavigationTarget>,
-    safe_zone_sub: Res<SafeZoneSubscription>,
+fn subscribe_on_new_agent(
+    trigger: Trigger<OnAdd, AgentName>,
+    mut commands: Commands,
+    agent_names: Query<&AgentName>,
+    node: Res<RclrsNode>,
 ) {
-    let Some(safe_zone) = safe_zone_sub.subscriber.data_callback() else {
+    let e = trigger.target();
+    let Ok(agent_name) = agent_names.get(e).map(|agent| agent.0.clone()) else {
         return;
     };
-    if current_safe_zone.matches(&safe_zone) {
-        return;
-    }
-
-    let Some((target_x, target_y, target_yaw)) = next_target(&safe_zone) else {
-        return;
-    };
-
-    // TODO(@xiyuoh) publish cost via updateCosts()
-
-    // TODO(@xiyuoh)
-    current_safe_zone.update(safe_zone.clone());
-    nav_target.write(NavigationTarget::new(
-        safe_zone.id.plan_id.destination_session,
-        target_x as f64,
-        target_y as f64,
-        target_yaw as f64,
+    let topic = agent_name + "/plan/safe_zone";
+    let subscription = Arc::new(RosSubscription::<SafeZone>::new(&node, topic.clone()));
+    commands.entity(e).insert((
+        SafeZoneSubscription {
+            subscriber: Arc::clone(&subscription),
+        },
+        CurrentSafeZone::default(),
     ));
+}
+
+fn update_incremental_target(
+    mut nav_target: EventWriter<NavigationTarget>,
+    mut subscriptions: Query<(
+        Entity,
+        &SafeZoneSubscription,
+        &mut CurrentSafeZone,
+        &AgentName,
+    )>,
+) {
+    for (e, safe_zone_sub, mut current_safe_zone, agent) in subscriptions.iter_mut() {
+        let Some(safe_zone) = safe_zone_sub.subscriber.data_callback() else {
+            continue;
+        };
+        if current_safe_zone.matches(&safe_zone) {
+            continue;
+        }
+        let Some((target_x, target_y, target_yaw)) = next_target(&safe_zone) else {
+            continue;
+        };
+
+        *current_safe_zone = CurrentSafeZone(Some(safe_zone.clone()));
+        nav_target.write(NavigationTarget::new(
+            e,
+            safe_zone.id.plan_id,
+            target_x as f64,
+            target_y as f64,
+            target_yaw as f64,
+        ));
+    }
 }
 
 fn next_target(safe_zone: &SafeZone) -> Option<(f32, f32, f32)> {
