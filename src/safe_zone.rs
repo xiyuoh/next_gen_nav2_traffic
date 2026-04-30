@@ -67,6 +67,10 @@ fn update_incremental_target(
     )>,
 ) {
     for (e, safe_zone_sub, mut current_safe_zone, agent) in subscriptions.iter_mut() {
+        // TODO(@xiyuoh) currently we're responding to every incoming SafeZone
+        // message, regardless of whether there is an ongoing NavigationRequest
+        // to ~/navigate_to_pose. Review whether this should be filtered.
+
         let Some(safe_zone) = safe_zone_sub.subscriber.data_callback() else {
             continue;
         };

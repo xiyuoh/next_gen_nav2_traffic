@@ -127,7 +127,7 @@ impl<T: MessageIDL + Debug> RosSubscription<T> {
             .create_subscription(
                 topic.clone().reliable().transient_local().keep_all(),
                 move |msg: T| {
-                    println!("Received a message on [{}]: {:?}", topic, msg);
+                    debug!("Received a message on [{}]: {:?}", topic, msg);
                     *data_clone.lock().unwrap() = Some(msg.clone());
 
                     // TODO(@xiyuoh) allow customized qos

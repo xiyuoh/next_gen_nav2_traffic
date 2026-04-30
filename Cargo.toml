@@ -13,6 +13,7 @@ name = "nav2_traffic"
 [dependencies]
 bevy = "0.16"
 bevy_ecs = "0.16"
+crossbeam = "0.8"
 crossflow = { version = "0.0.7", path = "../crossflow" }
 futures = "0.3"
 nalgebra = "0.34"
