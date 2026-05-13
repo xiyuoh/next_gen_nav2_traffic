@@ -56,7 +56,9 @@ impl Plugin for Nav2TrafficPlugin {
             ));
 
         // Add plugin for each agent
-        app.add_plugins(AgentNav2TrafficPlugin::new("robot_1".to_string()));
+        app.world_mut().spawn(AgentName("robot0".to_string()));
+        app.world_mut().spawn(AgentName("robot1".to_string()));
+        // app.add_plugins(AgentNav2TrafficPlugin::new("robot0".to_string()));
     }
 }
 

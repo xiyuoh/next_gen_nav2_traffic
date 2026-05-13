@@ -10,6 +10,9 @@ name = "nav2_traffic"
 path = "src/main.rs"
 name = "nav2_traffic"
 
+[package.metadata.ros]
+install_to_share = ["launch"]
+
 [dependencies]
 bevy = "0.16"
 bevy_ecs = "0.16"

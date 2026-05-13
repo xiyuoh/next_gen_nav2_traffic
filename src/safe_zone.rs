@@ -1,13 +1,20 @@
 use crate::{
-    inner_navigation_client::InnerNavigationTarget, AgentName, RclrsNode, RosSubscription,
+    inner_navigation_client::InnerNavigationTarget, AgentName, RclrsNode, RosPublisher,
+    RosSubscription,
 };
 use bevy::prelude::*;
+use nav2_msgs::msg::Costmap;
 use rmf_prototype_msgs::msg::{Region, SafeZone};
 use std::sync::Arc;
 
 #[derive(Component)]
 pub struct SafeZoneSubscription {
     pub subscriber: Arc<RosSubscription<SafeZone>>,
+}
+
+#[derive(Component)]
+pub struct CostmapPublisher {
+    pub publisher: Arc<RosPublisher<Costmap>>,
 }
 
 #[derive(Component, Debug, Clone, Default, Deref)]
@@ -33,7 +40,8 @@ pub struct SafeZoneSubscriptionPlugin {}
 impl Plugin for SafeZoneSubscriptionPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(PreUpdate, update_incremental_target)
-            .add_observer(create_safe_zone_subscriber);
+            .add_observer(create_safe_zone_subscriber)
+            .add_observer(create_costmap_publisher);
     }
 }
 
@@ -57,16 +65,34 @@ fn create_safe_zone_subscriber(
     ));
 }
 
+fn create_costmap_publisher(
+    trigger: Trigger<OnAdd, AgentName>,
+    mut commands: Commands,
+    agent_names: Query<&AgentName>,
+    node: Res<RclrsNode>,
+) {
+    let e = trigger.target();
+    let Ok(agent_name) = agent_names.get(e).map(|agent| agent.0.clone()) else {
+        return;
+    };
+    let topic = agent_name + "/global_costmap/plan/costmap";
+    let publisher = Arc::new(RosPublisher::<Costmap>::new(&node, topic));
+    commands.entity(e).insert(CostmapPublisher {
+        publisher: Arc::clone(&publisher),
+    });
+}
+
 fn update_incremental_target(
     mut nav_target: EventWriter<InnerNavigationTarget>,
     mut subscriptions: Query<(
         Entity,
         &SafeZoneSubscription,
+        &CostmapPublisher,
         &mut CurrentSafeZone,
         &AgentName,
     )>,
 ) {
-    for (e, safe_zone_sub, mut current_safe_zone, agent) in subscriptions.iter_mut() {
+    for (e, safe_zone_sub, costmap_pub, mut current_safe_zone, agent) in subscriptions.iter_mut() {
         // TODO(@xiyuoh) currently we're responding to every incoming SafeZone
         // message, regardless of whether there is an ongoing NavigationRequest
         // to ~/navigate_to_pose. Review whether this should be filtered.
@@ -78,6 +104,12 @@ fn update_incremental_target(
             continue;
         }
         let Some((target_x, target_y, target_yaw)) = next_target(&safe_zone) else {
+            continue;
+        };
+
+        // Call updateCosts() before setting new inner nav target
+        let Ok(_) = costmap_pub.publisher.publish(safe_zone.costmap.clone()) else {
+            error!("Failed to publish costmap for agent [{}]", agent.0);
             continue;
         };
 
