@@ -55,27 +55,10 @@ impl Plugin for Nav2TrafficPlugin {
                 NavigationServerPlugin::default(),
             ));
 
-        // Add plugin for each agent
+        // Spawn agenst
+        // TODO(@xiyuoh) review better way
         app.world_mut().spawn(AgentName("robot0".to_string()));
         app.world_mut().spawn(AgentName("robot1".to_string()));
-        // app.add_plugins(AgentNav2TrafficPlugin::new("robot0".to_string()));
-    }
-}
-
-struct AgentNav2TrafficPlugin {
-    agent: String,
-}
-
-impl AgentNav2TrafficPlugin {
-    pub fn new(agent: String) -> Self {
-        Self { agent }
-    }
-}
-
-impl Plugin for AgentNav2TrafficPlugin {
-    fn build(&self, app: &mut App) {
-        // Spawn an entity with AgentName
-        app.world_mut().spawn(AgentName(self.agent.clone()));
     }
 }
 

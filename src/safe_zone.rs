@@ -4,7 +4,7 @@ use crate::{
 };
 use bevy::prelude::*;
 use nav2_msgs::msg::Costmap;
-use rmf_prototype_msgs::msg::{Region, SafeZone};
+use rmf_prototype_msgs::msg::{Progress, Region, SafeZone};
 use std::sync::Arc;
 
 #[derive(Component)]
@@ -15,6 +15,11 @@ pub struct SafeZoneSubscription {
 #[derive(Component)]
 pub struct CostmapPublisher {
     pub publisher: Arc<RosPublisher<Costmap>>,
+}
+
+#[derive(Component)]
+pub struct ProgressPublisher {
+    pub publisher: Arc<RosPublisher<Progress>>,
 }
 
 #[derive(Component, Debug, Clone, Default, Deref)]
@@ -41,7 +46,8 @@ impl Plugin for SafeZoneSubscriptionPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(PreUpdate, update_incremental_target)
             .add_observer(create_safe_zone_subscriber)
-            .add_observer(create_costmap_publisher);
+            .add_observer(create_costmap_publisher)
+            .add_observer(create_progress_publisher);
     }
 }
 
@@ -75,9 +81,27 @@ fn create_costmap_publisher(
     let Ok(agent_name) = agent_names.get(e).map(|agent| agent.0.clone()) else {
         return;
     };
+    // TODO(@xiyuoh) review this topic name
     let topic = agent_name + "/global_costmap/plan/costmap";
     let publisher = Arc::new(RosPublisher::<Costmap>::new(&node, topic));
     commands.entity(e).insert(CostmapPublisher {
+        publisher: Arc::clone(&publisher),
+    });
+}
+
+fn create_progress_publisher(
+    trigger: Trigger<OnAdd, AgentName>,
+    mut commands: Commands,
+    agent_names: Query<&AgentName>,
+    node: Res<RclrsNode>,
+) {
+    let e = trigger.target();
+    let Ok(agent_name) = agent_names.get(e).map(|agent| agent.0.clone()) else {
+        return;
+    };
+    let topic = agent_name + "/plan/progress";
+    let publisher = Arc::new(RosPublisher::<Progress>::new(&node, topic));
+    commands.entity(e).insert(ProgressPublisher {
         publisher: Arc::clone(&publisher),
     });
 }
@@ -88,11 +112,14 @@ fn update_incremental_target(
         Entity,
         &SafeZoneSubscription,
         &CostmapPublisher,
+        &ProgressPublisher,
         &mut CurrentSafeZone,
         &AgentName,
     )>,
 ) {
-    for (e, safe_zone_sub, costmap_pub, mut current_safe_zone, agent) in subscriptions.iter_mut() {
+    for (e, safe_zone_sub, costmap_pub, progress_pub, mut current_safe_zone, agent) in
+        subscriptions.iter_mut()
+    {
         // TODO(@xiyuoh) currently we're responding to every incoming SafeZone
         // message, regardless of whether there is an ongoing NavigationRequest
         // to ~/navigate_to_pose. Review whether this should be filtered.
@@ -101,6 +128,10 @@ fn update_incremental_target(
             continue;
         };
         if current_safe_zone.matches(&safe_zone) {
+            continue;
+        }
+        // Validate safe zone msg
+        if !is_valid(&safe_zone) {
             continue;
         }
         let Some((target_x, target_y, target_yaw)) = next_target(&safe_zone) else {
@@ -113,6 +144,18 @@ fn update_incremental_target(
             continue;
         };
 
+        // Publish progress
+        let Ok(_) = progress_pub.publisher.publish(Progress {
+            progress: safe_zone.target_progress,
+            reached_waypoint: safe_zone.last_waypoint,
+            target_waypoint: safe_zone.target_waypoint[0], // TODO(@xiyuoh) review
+            reached_keys: vec![],                          // TODO(@xiyuoh)
+            plan_id: safe_zone.id.plan_id.clone(),
+        }) else {
+            error!("Failed to publish progress for agent [{}]", agent.0);
+            continue;
+        };
+
         *current_safe_zone = CurrentSafeZone(Some(safe_zone.clone()));
         nav_target.write(InnerNavigationTarget::new(
             e,
@@ -122,6 +165,21 @@ fn update_incremental_target(
             target_yaw as f64,
         ));
     }
+}
+
+fn is_valid(safe_zone: &SafeZone) -> bool {
+    if safe_zone.target_waypoint.is_empty() {
+        error!("Received a SafeZone message with empty target_waypoint");
+        return false;
+    }
+    if safe_zone.incremental_target.regions.is_empty()
+        && safe_zone.incremental_target.nodes.is_empty()
+    {
+        error!("Received a SafeZone message with empty incremental_target");
+        return false;
+    }
+
+    true
 }
 
 fn next_target(safe_zone: &SafeZone) -> Option<(f32, f32, f32)> {
