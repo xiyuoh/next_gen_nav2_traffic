@@ -29,6 +29,9 @@ use std::{
     thread,
 };
 
+pub mod agent;
+pub use agent::*;
+
 pub mod destination;
 pub use destination::*;
 
@@ -53,17 +56,10 @@ impl Plugin for Nav2TrafficPlugin {
                 SafeZoneSubscriptionPlugin::default(),
                 InnerNavigationClientPlugin::default(),
                 NavigationServerPlugin::default(),
+                Nav2AgentPlugin::default(),
             ));
-
-        // Spawn agenst
-        // TODO(@xiyuoh) review better way
-        app.world_mut().spawn(AgentName("robot0".to_string()));
-        app.world_mut().spawn(AgentName("robot1".to_string()));
     }
 }
-
-#[derive(Component, Clone, Debug, Default)]
-pub struct AgentName(String);
 
 #[derive(Resource, Deref)]
 pub struct RclrsNode(Arc<NodeState>);

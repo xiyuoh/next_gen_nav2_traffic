@@ -1,4 +1,4 @@
-use crate::{AgentName, RclrsNode, RosPublisher};
+use crate::{Nav2Agent, RclrsNode, RosPublisher};
 use bevy::prelude::*;
 use rmf_prototype_msgs::msg::DestinationGoal;
 use std::sync::Arc;
@@ -18,13 +18,13 @@ impl Plugin for DestinationGoalPublisherPlugin {
 }
 
 fn create_destination_goal_publisher(
-    trigger: Trigger<OnAdd, AgentName>,
+    trigger: Trigger<OnAdd, Nav2Agent>,
     mut commands: Commands,
-    agent_names: Query<&AgentName>,
+    agents: Query<&Nav2Agent>,
     node: Res<RclrsNode>,
 ) {
     let e = trigger.target();
-    let Ok(agent_name) = agent_names.get(e).map(|agent| agent.0.clone()) else {
+    let Ok(agent_name) = agents.get(e).map(|agent| agent.name.clone()) else {
         return;
     };
     let topic = agent_name + "/destination/goal";

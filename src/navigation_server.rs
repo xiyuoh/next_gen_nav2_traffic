@@ -1,7 +1,7 @@
 use crate::{
     destination::DestinationGoalPublisher,
     inner_navigation_client::{InnerNavigationClient, InnerNavigationFeedback},
-    AgentName, RclrsNode, RosActionServer, RosPublisher,
+    Nav2Agent, RclrsNode, RosActionServer, RosPublisher,
 };
 use bevy::prelude::*;
 use crossbeam::channel::{unbounded, Receiver, Sender};
@@ -42,13 +42,13 @@ impl Plugin for NavigationServerPlugin {
 fn create_navigation_server(
     trigger: Trigger<OnAdd, DestinationGoalPublisher>,
     mut commands: Commands,
-    agents: Query<(&AgentName, &DestinationGoalPublisher)>,
+    agents: Query<(&Nav2Agent, &DestinationGoalPublisher)>,
     node: Res<RclrsNode>,
 ) {
     let agent_entity = trigger.target();
     let Ok((agent_name, destination_publisher)) = agents
         .get(agent_entity)
-        .map(|(agent, publisher)| (agent.0.clone(), publisher))
+        .map(|(agent, publisher)| (agent.name.clone(), publisher))
     else {
         return;
     };

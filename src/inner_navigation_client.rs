@@ -1,4 +1,4 @@
-use crate::{AgentName, RclrsExecutorCommands, RclrsNode, RosActionClient};
+use crate::{Nav2Agent, RclrsExecutorCommands, RclrsNode, RosActionClient};
 use bevy::prelude::*;
 use crossflow::{prelude::*, service::Service};
 use futures::StreamExt;
@@ -112,13 +112,13 @@ impl Plugin for InnerNavigationClientPlugin {
 }
 
 fn create_inner_navigation_client(
-    trigger: Trigger<OnAdd, AgentName>,
+    trigger: Trigger<OnAdd, Nav2Agent>,
     mut commands: Commands,
-    agent_names: Query<&AgentName>,
+    agents: Query<&Nav2Agent>,
     node: Res<RclrsNode>,
 ) {
     let e = trigger.target();
-    let Ok(agent_name) = agent_names.get(e).map(|agent| agent.0.clone()) else {
+    let Ok(agent_name) = agents.get(e).map(|agent| agent.name.clone()) else {
         return;
     };
     let action_name = agent_name + "/inner/navigate_to_pose";

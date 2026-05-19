@@ -4,9 +4,13 @@
   <arg name="headless" default="0"/>
   <arg name="namespace" default="robot_1/inner"/>
   <arg name="use_namespace" default="1"/>
+  <arg name="use_sim_time" default="1"/>
+  <arg name="params_file" default="$(find-pkg-share nav2_bringup)/params/nav2_params.yaml"/>
   <group>
     <include file="$(find-pkg-share nav2_bringup)/launch/tb3_simulation_launch.py">
       <arg name="namespace" value="$(var namespace)"/>
+      <arg name="use_sim_time" value="$(var use_sim_time)"/>
+      <arg name="params_file" value="$(var params_file)"/>
     </include>
   </group>
 </launch>

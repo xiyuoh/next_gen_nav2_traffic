@@ -1,5 +1,5 @@
 use crate::{
-    inner_navigation_client::InnerNavigationTarget, AgentName, RclrsNode, RosPublisher,
+    inner_navigation_client::InnerNavigationTarget, Nav2Agent, RclrsNode, RosPublisher,
     RosSubscription,
 };
 use bevy::prelude::*;
@@ -52,13 +52,13 @@ impl Plugin for SafeZoneSubscriptionPlugin {
 }
 
 fn create_safe_zone_subscriber(
-    trigger: Trigger<OnAdd, AgentName>,
+    trigger: Trigger<OnAdd, Nav2Agent>,
     mut commands: Commands,
-    agent_names: Query<&AgentName>,
+    agents: Query<&Nav2Agent>,
     node: Res<RclrsNode>,
 ) {
     let e = trigger.target();
-    let Ok(agent_name) = agent_names.get(e).map(|agent| agent.0.clone()) else {
+    let Ok(agent_name) = agents.get(e).map(|agent| agent.name.clone()) else {
         return;
     };
     let topic = agent_name + "/plan/safe_zone";
@@ -72,13 +72,13 @@ fn create_safe_zone_subscriber(
 }
 
 fn create_costmap_publisher(
-    trigger: Trigger<OnAdd, AgentName>,
+    trigger: Trigger<OnAdd, Nav2Agent>,
     mut commands: Commands,
-    agent_names: Query<&AgentName>,
+    agents: Query<&Nav2Agent>,
     node: Res<RclrsNode>,
 ) {
     let e = trigger.target();
-    let Ok(agent_name) = agent_names.get(e).map(|agent| agent.0.clone()) else {
+    let Ok(agent_name) = agents.get(e).map(|agent| agent.name.clone()) else {
         return;
     };
     // TODO(@xiyuoh) review this topic name
@@ -90,13 +90,13 @@ fn create_costmap_publisher(
 }
 
 fn create_progress_publisher(
-    trigger: Trigger<OnAdd, AgentName>,
+    trigger: Trigger<OnAdd, Nav2Agent>,
     mut commands: Commands,
-    agent_names: Query<&AgentName>,
+    agents: Query<&Nav2Agent>,
     node: Res<RclrsNode>,
 ) {
     let e = trigger.target();
-    let Ok(agent_name) = agent_names.get(e).map(|agent| agent.0.clone()) else {
+    let Ok(agent_name) = agents.get(e).map(|agent| agent.name.clone()) else {
         return;
     };
     let topic = agent_name + "/plan/progress";
@@ -114,7 +114,7 @@ fn update_incremental_target(
         &CostmapPublisher,
         &ProgressPublisher,
         &mut CurrentSafeZone,
-        &AgentName,
+        &Nav2Agent,
     )>,
 ) {
     for (e, safe_zone_sub, costmap_pub, progress_pub, mut current_safe_zone, agent) in
@@ -140,7 +140,7 @@ fn update_incremental_target(
 
         // Call updateCosts() before setting new inner nav target
         let Ok(_) = costmap_pub.publisher.publish(safe_zone.costmap.clone()) else {
-            error!("Failed to publish costmap for agent [{}]", agent.0);
+            error!("Failed to publish costmap for agent [{}]", agent.name);
             continue;
         };
 
@@ -152,7 +152,7 @@ fn update_incremental_target(
             reached_keys: vec![],                          // TODO(@xiyuoh)
             plan_id: safe_zone.id.plan_id.clone(),
         }) else {
-            error!("Failed to publish progress for agent [{}]", agent.0);
+            error!("Failed to publish progress for agent [{}]", agent.name);
             continue;
         };
 

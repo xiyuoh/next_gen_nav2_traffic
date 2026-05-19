@@ -14,15 +14,21 @@ name = "nav2_traffic"
 install_to_share = ["launch"]
 
 [dependencies]
+axum = "0.8"
 bevy = "0.16"
 bevy_ecs = "0.16"
 crossbeam = "0.8"
 crossflow = { version = "0.0.7", path = "../crossflow" }
 futures = "0.3"
+mapf = { git = "https://github.com/open-rmf/mapf" }
+mapf_post = { git = "https://github.com/arjo129/mapf_post" }
 nalgebra = "0.34"
 rclrs = "0.7"
+reqwest = { version = "0.13", features = ["json"] }
+serde = "1.0"
+serde_json = "1.0"
 thiserror = "2.0"
-tokio = "1.52"
+tokio = { version = "1.52", features = ["full"] }
 uuid = "1"
 
 builtin_interfaces = "*"
@@ -30,4 +36,5 @@ geometry_msgs = "*"
 nav2_msgs = "*"
 rmf_prototype_msgs = "*"
 std_msgs = "*"
+tf2_msgs = "*"
 unique_identifier_msgs = "*"
