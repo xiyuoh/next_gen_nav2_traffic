@@ -19,11 +19,13 @@ use bevy::prelude::*;
 use crossflow::CrossflowPlugin;
 use futures::Future;
 use rclrs::{
-    ActionClientState, ActionIDL, ActionServerState, Context, CreateBasicExecutor,
-    ExecutorCommands, IntoPrimitiveOptions, MessageIDL, NodeState, PublisherState, RclrsError,
-    RequestedGoal, RequestedGoalClient, SpinOptions, Subscription, TerminatedGoal,
+    ActionClientState, ActionIDL, ActionServerState, ClientState, Context, CreateBasicExecutor,
+    ExecutorCommands, IntoNodeServiceCallback, IntoPrimitiveOptions, MessageIDL, NodeState,
+    PublisherState, RclrsError, RequestedGoal, RequestedGoalClient, ServiceIDL, ServiceState,
+    SpinOptions, Subscription, TerminatedGoal,
 };
 use std::{
+    env::Args,
     fmt::Debug,
     sync::{Arc, Mutex},
     thread,
@@ -44,6 +46,9 @@ pub use navigation_server::*;
 pub mod safe_zone;
 pub use safe_zone::*;
 
+pub mod testing;
+pub use testing::*;
+
 #[derive(Default)]
 pub struct Nav2TrafficPlugin {}
 
@@ -57,7 +62,14 @@ impl Plugin for Nav2TrafficPlugin {
                 InnerNavigationClientPlugin::default(),
                 NavigationServerPlugin::default(),
                 Nav2AgentPlugin::default(),
+                TestingPlugin::default(),
             ));
+
+        // Spawn agents last
+        let agent_names = vec!["robot0".to_string(), "robot1".to_string()];
+        for name in agent_names {
+            app.world_mut().spawn(Nav2Agent::new(name));
+        }
     }
 }
 
@@ -141,6 +153,19 @@ impl<T: MessageIDL + Debug> RosPublisher<T> {
 
     pub fn publish(&self, msg: T) -> Result<(), RclrsError> {
         self.publisher.publish(msg)
+    }
+}
+
+// Template for creating ROS 2 service clients
+pub struct RosServiceClient<T: ServiceIDL> {
+    client: Arc<ClientState<T>>,
+}
+
+impl<T: ServiceIDL> RosServiceClient<T> {
+    pub fn new(node: &Arc<NodeState>, service_name: String) -> Self {
+        let client = node.create_client::<T>(&service_name).unwrap();
+
+        Self { client }
     }
 }
 

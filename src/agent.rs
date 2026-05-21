@@ -2,18 +2,28 @@ use crate::{RclrsNode, RosSubscription};
 use bevy::prelude::*;
 use geometry_msgs::msg::PoseWithCovarianceStamped;
 use mapf::negotiation::scenario::Agent;
+use rmf_prototype_msgs::msg::SafeZoneId;
 use std::sync::Arc;
-use tf2_msgs::msg::TFMessage;
 
 #[derive(Component, Clone, Debug)]
 pub struct Nav2Agent {
     pub agent: Agent,
+    pub id: i32,
     pub name: String,
     pub localized: bool,
+    pub last_safe_zone_id: Option<SafeZoneId>,
 }
 
 impl Nav2Agent {
     pub fn new(name: String) -> Self {
+        // TODO(@xiyuoh) review this - danger of duplicate IDs
+        // Maybe have an accumulator mapping id to agent name as a resource
+        let id = name
+            .chars()
+            .last()
+            .and_then(|id| id.to_digit(10))
+            .unwrap_or(0) as i32;
+
         Self {
             agent: Agent {
                 start: [0, 0],
@@ -23,8 +33,10 @@ impl Nav2Agent {
                 speed: 1.0,
                 spin: 1.0,
             },
+            id,
             name,
             localized: false,
+            last_safe_zone_id: None,
         }
     }
 }
@@ -42,17 +54,12 @@ pub struct Nav2AgentPlugin {}
 
 impl Plugin for Nav2AgentPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(create_tf_subscriber);
-
-        let agent_names = vec!["robot0".to_string(), "robot1".to_string()];
-        // Spawn agents
-        for name in agent_names {
-            app.world_mut().spawn(Nav2Agent::new(name));
-        }
+        app.add_systems(PreUpdate, update_amcl_pose)
+            .add_observer(create_amcl_pose_subscriber);
     }
 }
 
-fn create_tf_subscriber(
+fn create_amcl_pose_subscriber(
     trigger: Trigger<OnAdd, Nav2Agent>,
     mut commands: Commands,
     agents: Query<&Nav2Agent>,
@@ -67,9 +74,12 @@ fn create_tf_subscriber(
         &node,
         topic.clone(),
     ));
-    commands.entity(e).insert((AmclPoseSubscription {
-        subscriber: Arc::clone(&subscriber),
-    },));
+    commands.entity(e).insert((
+        AmclPoseSubscription {
+            subscriber: Arc::clone(&subscriber),
+        },
+        AmclPose(PoseWithCovarianceStamped::default()),
+    ));
 }
 
 fn update_amcl_pose(mut agents: Query<(&mut AmclPose, &AmclPoseSubscription)>) {
@@ -77,24 +87,9 @@ fn update_amcl_pose(mut agents: Query<(&mut AmclPose, &AmclPoseSubscription)>) {
         let Some(amcl_pose_msg) = amcl_pose_sub.subscriber.data_callback() else {
             continue;
         };
-        amcl_pose.0 = amcl_pose_msg.clone();
-    }
-}
-
-fn localize_agent(mut agents: Query<(&mut Nav2Agent, &AmclPose)>) {
-    for (mut agent, amcl_pose) in agents.iter_mut() {
-        if agent.localized {
+        if amcl_pose.0 == amcl_pose_msg {
             continue;
         }
-
-        let pose = amcl_pose.0.pose.pose.clone();
-        let cell_x = pose.position.x.round() as i64;
-        let cell_y = pose.position.y.round() as i64;
-        agent.agent.start = [cell_x, cell_y];
-        agent.agent.yaw = pose.orientation.z.atan2(pose.orientation.w) * 2.0;
-        agent.localized = true;
-
-        // Set goal = start to prevent unwanted planning
-        agent.agent.goal = agent.agent.start;
+        amcl_pose.0 = amcl_pose_msg.clone();
     }
 }
