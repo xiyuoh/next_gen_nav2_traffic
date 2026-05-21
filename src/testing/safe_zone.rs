@@ -15,9 +15,9 @@ pub struct SafeZoneReceived {
 }
 
 #[derive(Default)]
-pub struct SafeZonePlugin {}
+pub struct MockSafeZonePlugin {}
 
-impl Plugin for SafeZonePlugin {
+impl Plugin for MockSafeZonePlugin {
     fn build(&self, app: &mut App) {
         app.add_event::<SafeZoneReceived>()
             .add_observer(create_safe_zone_publisher)
