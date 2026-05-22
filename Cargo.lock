@@ -4375,7 +4375,6 @@ dependencies = [
  "serde",
  "serde_json",
  "std_msgs",
- "std_srvs",
  "tf2_msgs",
  "thiserror 2.0.18",
  "tokio",
@@ -6154,15 +6153,6 @@ version = "5.3.7"
 dependencies = [
  "builtin_interfaces",
  "rosidl_runtime_rs",
-]
-
-[[package]]
-name = "std_srvs"
-version = "5.3.7"
-dependencies = [
- "builtin_interfaces",
- "rosidl_runtime_rs",
- "service_msgs",
 ]
 
 [[package]]
@@ -7992,6 +7982,10 @@ version = "2.8.4"
 [[patch.unused]]
 name = "statistics_msgs"
 version = "2.0.3"
+
+[[patch.unused]]
+name = "std_srvs"
+version = "5.3.7"
 
 [[patch.unused]]
 name = "stereo_msgs"

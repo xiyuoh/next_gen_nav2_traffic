@@ -1,9 +1,10 @@
-use crate::{testing::SafeZoneReceived, AmclPose, Nav2Agent, RclrsNode, RosSubscription};
+use crate::{
+    testing::{RequestPlan, SafeZoneReceived},
+    AmclPose, Nav2Agent, RclrsNode, RosSubscription,
+};
 use bevy::prelude::*;
-use crossbeam::channel::{unbounded, Receiver};
 use crossflow::{prelude::*, service::Service};
 use nav2_msgs::msg::Costmap;
-use rclrs::*;
 use reqwest::blocking::Client;
 use rmf_prototype_msgs::msg::{
     DestinationConstraints, PlanId, Region, SafeZone, SafeZoneId, TargetOrientation, TargetRegion,
@@ -11,20 +12,13 @@ use rmf_prototype_msgs::msg::{
 use rosidl_runtime_rs::BoundedSequence;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, sync::Arc};
-use std_srvs::srv::{Empty, Empty_Request, Empty_Response};
 use unique_identifier_msgs::msg::UUID as RosUuid;
 use uuid::Uuid;
 
-#[derive(Event, Clone)]
-pub struct RequestPlan {
+#[derive(Clone)]
+pub struct AgentRequest {
     agent: Entity,
     request: AgentPoseRequest,
-}
-
-#[derive(Resource)]
-pub struct RequestPlanService {
-    receiver: Receiver<()>,
-    service: Arc<ServiceState<Empty, Arc<NodeState>>>,
 }
 
 #[derive(Resource)]
@@ -65,33 +59,11 @@ impl Plugin for MapfBridgePlugin {
             client: Client::new(),
             url: "http://127.0.0.1:3000/update_pose".into(),
         })
-        .add_event::<RequestPlan>()
+        .add_observer(on_request_new_plan)
         .add_observer(create_costmap_subscriber);
 
         let allocation_services = MapfAllocationServices::from_app(app);
         app.insert_resource(allocation_services);
-
-        let (tx, rx) = unbounded::<()>();
-        let tx_for_closure = tx.clone();
-        let node = app.world().resource::<RclrsNode>();
-        let service_name = "/request_plan".to_string();
-        let service = node
-            .create_service::<Empty, _>(
-                service_name.keep_all().transient_local(),
-                move |_request: Empty_Request| {
-                    info!("Received a new RequestPlan!");
-                    let _ = tx_for_closure.send(());
-                    Empty_Response {
-                        structure_needs_at_least_one_member: 0,
-                    }
-                },
-            )
-            .unwrap();
-        app.insert_resource(RequestPlanService {
-            receiver: rx,
-            service,
-        })
-        .add_systems(PreUpdate, listen_for_request);
     }
 }
 
@@ -105,7 +77,7 @@ fn create_costmap_subscriber(
     let Ok(agent_name) = agents.get(e).map(|agent| agent.name.clone()) else {
         return;
     };
-    let topic = agent_name + "/global_costmap/costmap_raw";
+    let topic = agent_name + "/inner/global_costmap/costmap_raw";
     let subscription = Arc::new(RosSubscription::<Costmap>::new(&node, topic.clone()));
     commands.entity(e).insert(CostmapSubscription {
         subscriber: Arc::clone(&subscription),
@@ -114,12 +86,12 @@ fn create_costmap_subscriber(
 
 #[derive(Resource)]
 pub struct MapfAllocationServices {
-    allocation: Service<RequestPlan, (), ()>,
+    allocation: Service<AgentRequest, (), ()>,
 }
 
 impl MapfAllocationServices {
     pub fn from_app(app: &mut App) -> Self {
-        let request_mapf_plan_service = app.spawn_service(request_mapf_plan);
+        let request_mapf_plan_service = app.spawn_continuous_service(Update, request_mapf_plan);
         let convert_to_safe_zone_service = app.spawn_service(mapf_plan_to_safe_zone);
         let update_safe_zone_service = app.spawn_service(update_safe_zone);
 
@@ -131,10 +103,7 @@ impl MapfAllocationServices {
             let convert_to_safe_zone = builder.create_node(convert_to_safe_zone_service);
             let update_safe_zone = builder.create_node(update_safe_zone_service);
 
-            let (request_fork_result_input, request_fork_result) = builder.create_fork_result();
-            builder.connect(request.output, request_fork_result_input);
-            builder.connect(request_fork_result.ok, convert_to_safe_zone.input);
-            builder.connect(request_fork_result.err, scope.terminate);
+            builder.connect(request.streams, convert_to_safe_zone.input);
 
             let (convert_fork_result_input, convert_fork_result) = builder.create_fork_result();
             builder.connect(convert_to_safe_zone.output, convert_fork_result_input);
@@ -148,46 +117,49 @@ impl MapfAllocationServices {
     }
 }
 
-// NOTE(@xiyuoh) Make this blocking instead of async because we do not spawn
-// an active tokio reactor
 fn request_mapf_plan(
-    Blocking { request, .. }: Blocking<RequestPlan>,
+    srv: ContinuousService<AgentRequest, (), StreamOf<(AgentRequest, AgentAllocationResponse)>>,
+    mut orders: ContinuousQuery<
+        AgentRequest,
+        (),
+        StreamOf<(AgentRequest, AgentAllocationResponse)>,
+    >,
     mapf_post_client: Res<MapfPostClient>,
-) -> Result<(RequestPlan, AgentAllocationResponse), ()> {
-    let client = mapf_post_client.client.clone();
-    let url = mapf_post_client.url.clone();
-    info!(
-        "Sending POST request payload to {}...",
-        mapf_post_client.url
-    );
-
-    let response = match client.post(url).json(&request.request).send() {
-        Ok(res) => res,
-        Err(e) => {
-            error!("Failed to send POST request: {:?}", e);
-            return Err(());
-        }
+) {
+    let Some(mut orders) = orders.get_mut(&srv.key) else {
+        return;
     };
-
-    if response.status().is_success() {
-        let Ok(server_response) = response.json::<AgentAllocationResponse>() else {
-            return Err(());
-        };
-        info!("Response received from mapf_post: {:?}", server_response);
-        return Ok((request, server_response));
-    } else {
-        info!("Server returned an error status: {}", response.status());
-        if let Ok(error_text) = response.text() {
-            error!("Error requesting mapf plan: {:?}", error_text);
-        }
-        return Err(());
+    if orders.is_empty() {
+        return;
     }
+    let client = mapf_post_client.client.clone();
+
+    orders.for_each(|order| {
+        let request = order.request();
+        info!(
+            "Sending POST request payload to {}...",
+            mapf_post_client.url
+        );
+
+        if let Ok(response) = client
+            .post(mapf_post_client.url.clone())
+            .json(&request.request)
+            .send()
+        {
+            if response.status().is_success() {
+                if let Ok(server_response) = response.json::<AgentAllocationResponse>() {
+                    info!("Response received from mapf_post: {:?}", server_response);
+                    order.streams().send((request.clone(), server_response));
+                }
+            }
+        }
+    })
 }
 
 fn mapf_plan_to_safe_zone(
-    Blocking { request, .. }: Blocking<(RequestPlan, AgentAllocationResponse)>,
+    Blocking { request, .. }: Blocking<(AgentRequest, AgentAllocationResponse)>,
     mut costmap_sub: Query<(&mut Nav2Agent, &CostmapSubscription)>,
-) -> Result<(RequestPlan, SafeZone), ()> {
+) -> Result<(AgentRequest, SafeZone), ()> {
     let Ok((mut agent, subscription)) = costmap_sub.get_mut(request.0.agent) else {
         return Err(());
     };
@@ -284,7 +256,7 @@ fn mapf_plan_to_safe_zone(
 }
 
 fn update_safe_zone(
-    Blocking { request, .. }: Blocking<(RequestPlan, SafeZone)>,
+    Blocking { request, .. }: Blocking<(AgentRequest, SafeZone)>,
     mut commands: Commands,
 ) {
     // Trigger a SafeZoneReceived event instead of directly publishing it; we
@@ -295,29 +267,29 @@ fn update_safe_zone(
     });
 }
 
-fn listen_for_request(
+fn on_request_new_plan(
+    trigger: Trigger<RequestPlan>,
     mut commands: Commands,
-    agent_poses: Query<(Entity, &Nav2Agent, &AmclPose)>,
+    agent_poses: Query<(&Nav2Agent, &AmclPose)>,
     allocation_services: Res<MapfAllocationServices>,
-    request_plan_service: Res<RequestPlanService>,
 ) {
-    while let Ok(_) = request_plan_service.receiver.try_recv() {
-        for (e, agent, amcl_pose) in agent_poses.iter() {
-            let pose = amcl_pose.0.pose.pose.clone();
-            let req = RequestPlan {
-                agent: e,
-                request: AgentPoseRequest {
-                    agent_id: agent.id as usize,
-                    x: pose.position.x as f32,
-                    y: pose.position.y as f32,
-                    angle: 0.0,
-                },
-            };
-            let _ = commands
-                .request(req, allocation_services.allocation.clone())
-                .detach();
-        }
-    }
+    let e = trigger.event().0;
+    let Ok((agent, amcl_pose)) = agent_poses.get(e) else {
+        return;
+    };
+    let pose = amcl_pose.0.pose.pose.clone();
+    let req = AgentRequest {
+        agent: e,
+        request: AgentPoseRequest {
+            agent_id: agent.id as usize,
+            x: pose.position.x as f32,
+            y: pose.position.y as f32,
+            angle: 0.0,
+        },
+    };
+    let _ = commands
+        .request(req, allocation_services.allocation.clone())
+        .detach();
 }
 
 fn new_uuid() -> RosUuid {

@@ -82,7 +82,7 @@ fn create_costmap_publisher(
         return;
     };
     // TODO(@xiyuoh) review this topic name
-    let topic = agent_name + "/global_costmap/plan/costmap";
+    let topic = agent_name + "/inner/global_costmap/plan/costmap";
     let publisher = Arc::new(RosPublisher::<Costmap>::new(&node, topic));
     commands.entity(e).insert(CostmapPublisher {
         publisher: Arc::clone(&publisher),
