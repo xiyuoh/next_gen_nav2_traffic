@@ -1,6 +1,6 @@
 use crate::{
     testing::{RequestPlan, SafeZoneReceived},
-    AmclPose, Nav2Agent, RclrsNode, RosSubscription,
+    AmclPose, CurrentSafeZone, Nav2Agent, NavigationCompleted, RclrsNode, RosSubscription,
 };
 use bevy::prelude::*;
 use crossflow::{prelude::*, service::Service};
@@ -15,7 +15,7 @@ use std::{collections::HashSet, sync::Arc};
 use unique_identifier_msgs::msg::UUID as RosUuid;
 use uuid::Uuid;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AgentRequest {
     agent: Entity,
     request: AgentPoseRequest,
@@ -86,7 +86,7 @@ fn create_costmap_subscriber(
 
 #[derive(Resource)]
 pub struct MapfAllocationServices {
-    allocation: Service<AgentRequest, (), ()>,
+    allocation: Service<Entity, (), ()>,
 }
 
 impl MapfAllocationServices {
@@ -108,9 +108,8 @@ impl MapfAllocationServices {
             let (convert_fork_result_input, convert_fork_result) = builder.create_fork_result();
             builder.connect(convert_to_safe_zone.output, convert_fork_result_input);
             builder.connect(convert_fork_result.ok, update_safe_zone.input);
-            builder.connect(convert_fork_result.err, scope.terminate);
 
-            builder.connect(update_safe_zone.output, scope.terminate);
+            builder.connect(request.output, scope.terminate);
         });
 
         Self { allocation }
@@ -118,12 +117,10 @@ impl MapfAllocationServices {
 }
 
 fn request_mapf_plan(
-    srv: ContinuousService<AgentRequest, (), StreamOf<(AgentRequest, AgentAllocationResponse)>>,
-    mut orders: ContinuousQuery<
-        AgentRequest,
-        (),
-        StreamOf<(AgentRequest, AgentAllocationResponse)>,
-    >,
+    srv: ContinuousService<Entity, (), StreamOf<(AgentRequest, AgentAllocationResponse)>>,
+    mut orders: ContinuousQuery<Entity, (), StreamOf<(AgentRequest, AgentAllocationResponse)>>,
+    mut nav_completed: EventReader<NavigationCompleted>,
+    agent_poses: Query<(&Nav2Agent, &AmclPose)>,
     mapf_post_client: Res<MapfPostClient>,
 ) {
     let Some(mut orders) = orders.get_mut(&srv.key) else {
@@ -134,33 +131,63 @@ fn request_mapf_plan(
     }
     let client = mapf_post_client.client.clone();
 
+    // TODO(@xiyuoh) validate using the plan id in this NavigationCompleted event
+    let completed_agents: HashSet<Entity> = nav_completed.read().map(|event| event.agent).collect();
     orders.for_each(|order| {
         let request = order.request();
-        info!(
+
+        // If overall navigation has completed, end workflow
+        if completed_agents.contains(&request) {
+            info!(
+                "Agent {:?} has completed navigation! Ending workflow",
+                request
+            );
+            order.respond(());
+            return;
+        }
+
+        // Create AgentRequest using the current AmclPose
+        let Ok((agent, amcl_pose)) = agent_poses.get(*request) else {
+            return;
+        };
+        let pose = amcl_pose.0.pose.pose.clone();
+        let agent_request = AgentRequest {
+            agent: *request,
+            request: AgentPoseRequest {
+                agent_id: agent.id as usize,
+                x: pose.position.x as f32,
+                y: pose.position.y as f32,
+                angle: 0.0,
+            },
+        };
+
+        debug!(
             "Sending POST request payload to {}...",
             mapf_post_client.url
         );
 
         if let Ok(response) = client
             .post(mapf_post_client.url.clone())
-            .json(&request.request)
+            .json(&agent_request.request)
             .send()
         {
             if response.status().is_success() {
                 if let Ok(server_response) = response.json::<AgentAllocationResponse>() {
-                    info!("Response received from mapf_post: {:?}", server_response);
-                    order.streams().send((request.clone(), server_response));
+                    debug!("Response received from mapf_post: {:?}", server_response);
+                    order
+                        .streams()
+                        .send((agent_request.clone(), server_response));
                 }
             }
         }
-    })
+    });
 }
 
 fn mapf_plan_to_safe_zone(
     Blocking { request, .. }: Blocking<(AgentRequest, AgentAllocationResponse)>,
-    mut costmap_sub: Query<(&mut Nav2Agent, &CostmapSubscription)>,
+    costmap_sub: Query<(&Nav2Agent, &CostmapSubscription)>,
 ) -> Result<(AgentRequest, SafeZone), ()> {
-    let Ok((mut agent, subscription)) = costmap_sub.get_mut(request.0.agent) else {
+    let Ok((agent, subscription)) = costmap_sub.get(request.0.agent) else {
         return Err(());
     };
 
@@ -220,16 +247,6 @@ fn mapf_plan_to_safe_zone(
     }
     costmap.data = costmap_data;
 
-    // Update SafeZoneId
-    let safe_zone_id = agent.last_safe_zone_id.get_or_insert(SafeZoneId {
-        plan_id: PlanId {
-            destination_session: new_uuid(),
-            plan_version: 0,
-        },
-        safe_zone_version: 0,
-    });
-    safe_zone_id.safe_zone_version = safe_zone_id.safe_zone_version + 1;
-
     let safe_zone = SafeZone {
         incremental_target: DestinationConstraints {
             regions: vec![TargetRegion {
@@ -239,7 +256,7 @@ fn mapf_plan_to_safe_zone(
                     hint: Region::HINT_POINT,
                 },
                 orientations: vec![TargetOrientation {
-                    orientation_radians: 1.57,
+                    orientation_radians: 0.0, // TODO(@xiyuoh)
                     ..default()
                 }],
             }],
@@ -249,7 +266,8 @@ fn mapf_plan_to_safe_zone(
         target_waypoint: BoundedSequence::<u64, 1>::new(1), // TODO(@xiyuoh)
         last_waypoint: 0,                                   // TODO(@xiyuoh)
         target_progress: 0.0,                               // TODO(@xiyuoh)
-        id: safe_zone_id.clone(),
+        // SafeZoneId to be populated downstream
+        ..default()
     };
 
     Ok((request.0, safe_zone))
@@ -258,37 +276,50 @@ fn mapf_plan_to_safe_zone(
 fn update_safe_zone(
     Blocking { request, .. }: Blocking<(AgentRequest, SafeZone)>,
     mut commands: Commands,
+    mut agents: Query<(&mut Nav2Agent, &CurrentSafeZone)>,
 ) {
+    let Ok((mut agent, current_safe_zone)) = agents.get_mut(request.0.agent) else {
+        return;
+    };
+
+    // If SafeZone is the same, do not publish
+    if let Some(current_safe_zone) = &current_safe_zone.0 {
+        if current_safe_zone.incremental_target == request.1.incremental_target
+            && current_safe_zone.costmap.data == request.1.costmap.data
+        {
+            return;
+        }
+    }
+
+    // Increment SafeZoneId for both agent and to-be-published msg here
+    let safe_zone_id = agent.last_safe_zone_id.get_or_insert(SafeZoneId {
+        plan_id: PlanId {
+            destination_session: new_uuid(),
+            plan_version: 0,
+        },
+        safe_zone_version: 0,
+    });
+    safe_zone_id.safe_zone_version = safe_zone_id.safe_zone_version + 1;
+
+    let mut safe_zone = request.1.clone();
+    safe_zone.id = safe_zone_id.clone();
+
     // Trigger a SafeZoneReceived event instead of directly publishing it; we
     // allow all publishing to be consolidated in the observer
     commands.trigger(SafeZoneReceived {
         agent: request.0.agent,
-        safe_zone: request.1,
+        safe_zone,
     });
 }
 
 fn on_request_new_plan(
     trigger: Trigger<RequestPlan>,
     mut commands: Commands,
-    agent_poses: Query<(&Nav2Agent, &AmclPose)>,
     allocation_services: Res<MapfAllocationServices>,
 ) {
     let e = trigger.event().0;
-    let Ok((agent, amcl_pose)) = agent_poses.get(e) else {
-        return;
-    };
-    let pose = amcl_pose.0.pose.pose.clone();
-    let req = AgentRequest {
-        agent: e,
-        request: AgentPoseRequest {
-            agent_id: agent.id as usize,
-            x: pose.position.x as f32,
-            y: pose.position.y as f32,
-            angle: 0.0,
-        },
-    };
     let _ = commands
-        .request(req, allocation_services.allocation.clone())
+        .request(e, allocation_services.allocation.clone())
         .detach();
 }
 

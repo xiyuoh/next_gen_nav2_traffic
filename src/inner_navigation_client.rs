@@ -168,6 +168,8 @@ enum InnerNavigationErrorKind {
     RequestGoalError,
     #[error("Goal was aborted!")]
     GoalAbortedError,
+    #[error("Goal was cancelled!")]
+    GoalCancelledError,
     #[error("Unknown error!")]
     UnknownError,
 }
@@ -189,6 +191,7 @@ impl InnerNavigationServices {
         let async_monitor_ongoing_navigation_service =
             app.spawn_service(async_monitor_ongoing_navigation);
         let cleanup_goal_client_service = app.spawn_service(cleanup_goal_client);
+        let log_error_service = app.spawn_service(log_inner_navigation_error);
 
         let await_and_send_goal = app.world_mut().spawn_workflow(|scope, builder| {
             let await_requests = builder
@@ -203,6 +206,7 @@ impl InnerNavigationServices {
             let async_monitor_new_navigation_request =
                 builder.create_node(async_monitor_ongoing_navigation_service);
             let cleanup_goal_client = builder.create_node(cleanup_goal_client_service);
+            let log_error = builder.create_node(log_error_service);
 
             // Stream out new requests to downstream nodes
             builder.connect(await_requests.streams, check_existing_goal.input);
@@ -237,11 +241,20 @@ impl InnerNavigationServices {
                 async_monitor_new_navigation_request.input,
             );
 
-            // On completed navigation request, reset goal client
-            builder.connect(
-                async_monitor_new_navigation_request.output,
-                cleanup_goal_client.input,
-            );
+            // On completed navigation request, check if goal was aborted and if yes retry
+            let retry_nav =
+                builder.create_map_block(|res: InnerNavigationResult| retry_navigation(res));
+            builder.connect(async_monitor_new_navigation_request.output, retry_nav.input);
+            let (retry_fork_result_input, retry_fork_result) = builder.create_fork_result();
+            builder.connect(retry_nav.output, retry_fork_result_input);
+            builder.connect(retry_fork_result.ok, async_request_new_goal.input);
+
+            // If not, cleanup goal client
+            builder.connect(retry_fork_result.err, cleanup_goal_client.input);
+
+            // Connect errors to logging node
+            builder.connect(cancel_goal_fork_result.err, log_error.input);
+            builder.connect(new_goal_fork_result.err, log_error.input);
 
             // Connect only await_requests output to terminate
             builder.connect(await_requests.output, scope.terminate);
@@ -309,15 +322,20 @@ fn check_existing_goal(
     Blocking { request, .. }: Blocking<InnerNavigationRequest>,
     inner_nav_clients: Query<&InnerNavigationClient>,
 ) -> Result<CancelInnerNavigation, InnerNavigationRequest> {
+    // TODO(@xiyuoh) Create a replan mechanism instead of cancelling goal on every
+    // new request
+    let replan_and_cancel = false;
     if let Some(existing_goal) = inner_nav_clients
         .get(request.agent)
         .ok()
         .and_then(|inner_client| inner_client.goal().as_ref().map(|goal| goal.client()))
     {
-        return Ok(CancelInnerNavigation {
-            request,
-            cancel_client: existing_goal.clone(),
-        });
+        if replan_and_cancel {
+            return Ok(CancelInnerNavigation {
+                request,
+                cancel_client: existing_goal.clone(),
+            });
+        }
     }
     return Err(request);
 }
@@ -363,12 +381,17 @@ fn async_request_new_goal(
     // Reset goal client before submitting new request
     inner_nav_client.reset_goal();
 
+    let mut pose = request.target_pose.clone();
+    info!(
+        "[{:?}] Requesting new goal to pose [{}, {}]",
+        request.agent.index(),
+        pose.pose.position.x,
+        pose.pose.position.y
+    );
+    pose.header.frame_id = "map".to_string();
     let nav_request = inner_nav_client
         .action_client
-        .request_goal(NavigateToPose_Goal {
-            pose: request.target_pose.clone(),
-            ..default()
-        });
+        .request_goal(NavigateToPose_Goal { pose, ..default() });
 
     executor_commands
         .run(async move {
@@ -405,11 +428,15 @@ fn update_goal_client(
         ));
     } else {
         warn!(
-            "InnerNavigationClient not found for agent [{:?}]!",
+            "[{:?}] InnerNavigationClient not found!",
             handle.request.agent.index()
         );
     }
     handle
+}
+
+fn log_inner_navigation_error(Blocking { request: err, .. }: Blocking<InnerNavigationError>) {
+    error!("InnerNavigationError occurred: {}", err.kind);
 }
 
 #[derive(Clone, Event)]
@@ -447,18 +474,32 @@ fn async_monitor_ongoing_navigation(
                         });
                     }
                     GoalEvent::Status(s) => {
-                        info!("[inner nav2pose] Status: {:?}", s.code);
+                        info!(
+                            "[{:?}] [inner nav2pose] Status: {:?}",
+                            handle.request.agent.index(),
+                            s.code
+                        );
                     }
                     GoalEvent::Result((status, result)) => {
-                        info!("[inner nav2pose] Result: {:?}", result);
+                        info!(
+                            "[{:?}] [inner nav2pose] Result: {:?}",
+                            handle.request.agent.index(),
+                            result
+                        );
                         match status {
                             GoalStatusCode::Succeeded => {
                                 return Ok(InnerNavigationSuccess { handle })
                             }
-                            GoalStatusCode::Aborted | GoalStatusCode::Cancelled => {
+                            GoalStatusCode::Aborted => {
                                 return Err(InnerNavigationError {
                                     handle: Some(handle.clone()),
                                     kind: InnerNavigationErrorKind::GoalAbortedError,
+                                })
+                            }
+                            GoalStatusCode::Cancelled => {
+                                return Err(InnerNavigationError {
+                                    handle: Some(handle.clone()),
+                                    kind: InnerNavigationErrorKind::GoalCancelledError,
                                 })
                             }
                             _ => {}
@@ -477,6 +518,31 @@ fn async_monitor_ongoing_navigation(
                 kind: InnerNavigationErrorKind::UnknownError,
             }))
         })
+}
+
+fn retry_navigation(
+    result: InnerNavigationResult,
+) -> Result<InnerNavigationRequest, InnerNavigationResult> {
+    match result {
+        Ok(_) => return Err(result),
+        Err(ref err) => {
+            if matches!(err.kind, InnerNavigationErrorKind::GoalAbortedError) {
+                let Some(ref handle) = err.handle else {
+                    return Err(result);
+                };
+                let target = &handle.request;
+                let target_pose = target.target_pose.clone();
+
+                info!("[{:?}] Goal aborted. Retrying", target.agent.index());
+                return Ok(InnerNavigationRequest {
+                    agent: target.agent,
+                    safe_zone_id: target.safe_zone_id.clone(),
+                    target_pose,
+                });
+            }
+        }
+    }
+    return Err(result);
 }
 
 fn cleanup_goal_client(
@@ -500,7 +566,7 @@ fn cleanup_goal_client(
         inner_nav_client.reset_goal();
     } else {
         warn!(
-            "InnerNavigationClient not found for agent [{:?}]!",
+            "[{:?}] InnerNavigationClient not found!",
             handle.request.agent.index()
         );
     }

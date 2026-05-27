@@ -69,7 +69,7 @@ fn create_amcl_pose_subscriber(
     let Ok(agent_name) = agents.get(e).map(|agent| agent.name.clone()) else {
         return;
     };
-    let topic = agent_name.clone() + "/amcl_pose";
+    let topic = agent_name.clone() + "/inner/amcl_pose";
     let subscriber = Arc::new(RosSubscription::<PoseWithCovarianceStamped>::new(
         &node,
         topic.clone(),

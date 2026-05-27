@@ -31,6 +31,7 @@ impl Plugin for NavigationServerPlugin {
     fn build(&self, app: &mut App) {
         // TODO(@xiyuoh) have a systematic approach to setting schedules for systems
         app.add_systems(PreUpdate, request_publish_feedback_service)
+            .add_event::<NavigationCompleted>()
             .add_observer(create_navigation_server)
             .add_observer(on_inner_navigation_feedback);
 
@@ -312,6 +313,12 @@ impl AgentPose {
     }
 }
 
+#[derive(Event, Clone)]
+pub struct NavigationCompleted {
+    pub agent: Entity,
+    pub plan_id: PlanId,
+}
+
 fn on_inner_navigation_feedback(
     trigger: Trigger<InnerNavigationFeedback>,
     mut inner_nav_feedback: EventWriter<InnerNavigationFeedback>,
@@ -347,6 +354,7 @@ fn monitor_inner_navigation_feedback(
 fn monitor_inner_navigation_clients(
     srv: ContinuousService<NavigationRequest, (), StreamOf<NavigationRequest>>,
     mut orders: ContinuousQuery<NavigationRequest, (), StreamOf<NavigationRequest>>,
+    mut nav_completed: EventWriter<NavigationCompleted>,
     agents: Query<(&InnerNavigationClient, &AgentPose)>,
 ) {
     let Some(mut orders) = orders.get_mut(&srv.key) else {
@@ -363,6 +371,10 @@ fn monitor_inner_navigation_clients(
         // If reached destination, complete order
         if let Ok((client, pose)) = agents.get(request.agent) {
             if client.active_goal.is_none() && request.destination_reached(pose) {
+                nav_completed.write(NavigationCompleted {
+                    agent: request.agent,
+                    plan_id: request.plan_id.clone(),
+                });
                 order.respond(());
             }
         }
