@@ -7956,8 +7956,16 @@ name = "ros_gz_interfaces"
 version = "1.0.22"
 
 [[patch.unused]]
+name = "rosapi_msgs"
+version = "2.6.0"
+
+[[patch.unused]]
 name = "rosbag2_interfaces"
 version = "0.26.10"
+
+[[patch.unused]]
+name = "rosbridge_msgs"
+version = "2.6.0"
 
 [[patch.unused]]
 name = "rosgraph_msgs"
