@@ -3,8 +3,10 @@ use crate::{
     RosSubscription,
 };
 use bevy::prelude::*;
-use nav2_msgs::msg::Costmap;
-use rmf_prototype_msgs::msg::{Progress, Region, SafeZone};
+use ros_env::{
+    nav2_msgs::msg::Costmap,
+    rmf_prototype_msgs::msg::{Progress, Region, SafeZone},
+};
 use std::sync::Arc;
 
 #[derive(Component)]

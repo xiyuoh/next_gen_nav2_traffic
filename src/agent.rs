@@ -1,8 +1,7 @@
 use crate::{RclrsNode, RosSubscription};
 use bevy::prelude::*;
-use geometry_msgs::msg::PoseWithCovarianceStamped;
 use mapf::negotiation::scenario::Agent;
-use rmf_prototype_msgs::msg::SafeZoneId;
+use ros_env::{geometry_msgs::msg::PoseWithCovarianceStamped, rmf_prototype_msgs::msg::SafeZoneId};
 use std::sync::Arc;
 
 #[derive(Component, Clone, Debug)]

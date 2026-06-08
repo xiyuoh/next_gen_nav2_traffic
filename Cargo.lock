@@ -62,16 +62,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "action_msgs"
-version = "2.0.3"
-dependencies = [
- "builtin_interfaces",
- "rosidl_runtime_rs",
- "service_msgs",
- "unique_identifier_msgs",
-]
-
-[[package]]
 name = "addr2line"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -130,6 +120,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b901da946b7b1620d44563e10c7634681af855a7f5fb59bd09b6eb801dcf6e49"
 dependencies = [
  "itertools 0.8.2",
+ "walkdir",
+]
+
+[[package]]
+name = "ament_rs"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68248386ad9d8f95d809309d97ae10ae5984818a563b30c13c9b44aa41f439da"
+dependencies = [
+ "itertools 0.14.0",
  "walkdir",
 ]
 
@@ -1745,13 +1745,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfc1116225f66d2ea341a26503f83a6b1205070a6f7199ce1f1550ead91f6fd7"
 
 [[package]]
-name = "builtin_interfaces"
-version = "2.0.3"
-dependencies = [
- "rosidl_runtime_rs",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1844,6 +1837,16 @@ dependencies = [
  "rustix 0.38.44",
  "slab",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "cargo_toml"
+version = "0.22.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "374b7c592d9c00c1f4972ea58390ac6b18cbb6ab79011f3bdc90a0b82ca06b77"
+dependencies = [
+ "serde",
+ "toml",
 ]
 
 [[package]]
@@ -2834,27 +2837,6 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
-]
-
-[[package]]
-name = "geographic_msgs"
-version = "1.0.6"
-dependencies = [
- "builtin_interfaces",
- "geometry_msgs",
- "rosidl_runtime_rs",
- "service_msgs",
- "std_msgs",
- "unique_identifier_msgs",
-]
-
-[[package]]
-name = "geometry_msgs"
-version = "5.3.7"
-dependencies = [
- "builtin_interfaces",
- "rosidl_runtime_rs",
- "std_msgs",
 ]
 
 [[package]]
@@ -4268,32 +4250,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nav2_msgs"
-version = "1.3.11"
-dependencies = [
- "action_msgs",
- "builtin_interfaces",
- "geographic_msgs",
- "geometry_msgs",
- "nav_msgs",
- "rosidl_runtime_rs",
- "service_msgs",
- "std_msgs",
- "unique_identifier_msgs",
-]
-
-[[package]]
-name = "nav_msgs"
-version = "5.3.7"
-dependencies = [
- "builtin_interfaces",
- "geometry_msgs",
- "rosidl_runtime_rs",
- "service_msgs",
- "std_msgs",
-]
-
-[[package]]
 name = "ndk"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4359,26 +4315,20 @@ dependencies = [
  "axum",
  "bevy",
  "bevy_ecs",
- "builtin_interfaces",
  "crossbeam",
  "crossflow",
  "futures",
- "geometry_msgs",
  "mapf",
  "mapf_post",
  "nalgebra 0.34.2",
- "nav2_msgs",
  "rclrs",
  "reqwest",
- "rmf_prototype_msgs",
+ "ros-env",
  "rosidl_runtime_rs",
  "serde",
  "serde_json",
- "std_msgs",
- "tf2_msgs",
  "thiserror 2.0.18",
  "tokio",
- "unique_identifier_msgs",
  "uuid",
 ]
 
@@ -5402,13 +5352,15 @@ checksum = "60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3"
 name = "rclrs"
 version = "0.7.0"
 dependencies = [
- "ament_rs",
+ "ament_rs 0.2.1",
+ "ament_rs 0.3.0",
  "async-std",
  "async-stream",
  "cfg-if",
  "futures",
  "futures-lite",
  "libloading",
+ "ros-env",
  "rosidl_runtime_rs",
  "rustflags",
  "tokio",
@@ -5551,22 +5503,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rmf_prototype_msgs"
-version = "0.0.1"
-dependencies = [
- "action_msgs",
- "builtin_interfaces",
- "geographic_msgs",
- "geometry_msgs",
- "nav2_msgs",
- "nav_msgs",
- "rosidl_runtime_rs",
- "service_msgs",
- "std_msgs",
- "unique_identifier_msgs",
-]
-
-[[package]]
 name = "robust"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5592,6 +5528,17 @@ dependencies = [
  "bitflags 2.11.1",
  "serde",
  "serde_derive",
+]
+
+[[package]]
+name = "ros-env"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0e0b962879d7a8c19c927deda2b1774876ba553fac31cd25263117f5151d0ee"
+dependencies = [
+ "ament_rs 0.3.0",
+ "cargo_toml",
+ "rosidl_runtime_rs",
 ]
 
 [[package]]
@@ -5919,6 +5866,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_spanned"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
 name = "serde_urlencoded"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5941,14 +5897,6 @@ dependencies = [
  "ryu",
  "serde",
  "unsafe-libyaml",
-]
-
-[[package]]
-name = "service_msgs"
-version = "2.0.3"
-dependencies = [
- "builtin_interfaces",
- "rosidl_runtime_rs",
 ]
 
 [[package]]
@@ -6148,14 +6096,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
-name = "std_msgs"
-version = "5.3.7"
-dependencies = [
- "builtin_interfaces",
- "rosidl_runtime_rs",
-]
-
-[[package]]
 name = "strsim"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6319,19 +6259,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tf2_msgs"
-version = "0.36.20"
-dependencies = [
- "action_msgs",
- "builtin_interfaces",
- "geometry_msgs",
- "rosidl_runtime_rs",
- "service_msgs",
- "std_msgs",
- "unique_identifier_msgs",
-]
-
-[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6474,10 +6401,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "toml"
+version = "0.9.12+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf92845e79fc2e2def6a5d828f0801e29a2f8acc037becc5ab08595c7d5e9863"
+dependencies = [
+ "indexmap",
+ "serde_core",
+ "serde_spanned",
+ "toml_datetime 0.7.5+spec-1.1.0",
+ "toml_parser",
+ "toml_writer",
+ "winnow 0.7.15",
+]
+
+[[package]]
 name = "toml_datetime"
 version = "0.6.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22cddaf88f4fbc13c51aebbf5f8eceb5c7c5a9da2ac40a13519eb5b0a0e8f11c"
+
+[[package]]
+name = "toml_datetime"
+version = "0.7.5+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92e1cfed4a3038bc5a127e35a2d360f145e1f4b971b551a2ba5fd7aedf7e1347"
+dependencies = [
+ "serde_core",
+]
 
 [[package]]
 name = "toml_datetime"
@@ -6519,6 +6470,12 @@ checksum = "a2abe9b86193656635d2411dc43050282ca48aa31c2451210f4202550afb7526"
 dependencies = [
  "winnow 1.0.1",
 ]
+
+[[package]]
+name = "toml_writer"
+version = "1.1.1+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "756daf9b1013ebe47a8776667b466417e2d4c5679d441c26230efd9ef78692db"
 
 [[package]]
 name = "tower"
@@ -6755,13 +6712,6 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
-
-[[package]]
-name = "unique_identifier_msgs"
-version = "2.5.0"
-dependencies = [
- "rosidl_runtime_rs",
-]
 
 [[package]]
 name = "unsafe-libyaml"
@@ -7868,6 +7818,10 @@ name = "ackermann_msgs"
 version = "2.0.2"
 
 [[patch.unused]]
+name = "action_msgs"
+version = "2.0.3"
+
+[[patch.unused]]
 name = "actionlib_msgs"
 version = "5.3.7"
 
@@ -7878,6 +7832,10 @@ version = "0.0.1"
 [[patch.unused]]
 name = "bond"
 version = "4.2.0"
+
+[[patch.unused]]
+name = "builtin_interfaces"
+version = "2.0.3"
 
 [[patch.unused]]
 name = "composition_interfaces"
@@ -7904,6 +7862,14 @@ name = "example_interfaces"
 version = "0.12.0"
 
 [[patch.unused]]
+name = "geographic_msgs"
+version = "1.0.6"
+
+[[patch.unused]]
+name = "geometry_msgs"
+version = "5.3.7"
+
+[[patch.unused]]
 name = "gps_msgs"
 version = "2.1.2"
 
@@ -7924,8 +7890,16 @@ name = "moveit_msgs"
 version = "2.6.0"
 
 [[patch.unused]]
+name = "nav2_msgs"
+version = "1.3.11"
+
+[[patch.unused]]
 name = "nav_2d_msgs"
 version = "1.3.11"
+
+[[patch.unused]]
+name = "nav_msgs"
+version = "5.3.7"
 
 [[patch.unused]]
 name = "object_recognition_msgs"
@@ -7942,6 +7916,10 @@ version = "2.7.0"
 [[patch.unused]]
 name = "rcl_interfaces"
 version = "2.0.3"
+
+[[patch.unused]]
+name = "rmf_prototype_msgs"
+version = "0.0.1"
 
 [[patch.unused]]
 name = "rmw_dds_common"
@@ -7976,6 +7954,10 @@ name = "sensor_msgs"
 version = "5.3.7"
 
 [[patch.unused]]
+name = "service_msgs"
+version = "2.0.3"
+
+[[patch.unused]]
 name = "shape_msgs"
 version = "5.3.7"
 
@@ -7992,6 +7974,10 @@ name = "statistics_msgs"
 version = "2.0.3"
 
 [[patch.unused]]
+name = "std_msgs"
+version = "5.3.7"
+
+[[patch.unused]]
 name = "std_srvs"
 version = "5.3.7"
 
@@ -8001,7 +7987,11 @@ version = "5.3.7"
 
 [[patch.unused]]
 name = "test_msgs"
-version = "2.0.3"
+version = "2.0.4"
+
+[[patch.unused]]
+name = "tf2_msgs"
+version = "0.36.20"
 
 [[patch.unused]]
 name = "topic_tools_interfaces"
@@ -8014,6 +8004,10 @@ version = "5.3.7"
 [[patch.unused]]
 name = "type_description_interfaces"
 version = "2.0.3"
+
+[[patch.unused]]
+name = "unique_identifier_msgs"
+version = "2.5.0"
 
 [[patch.unused]]
 name = "vision_msgs"

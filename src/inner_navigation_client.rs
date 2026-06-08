@@ -2,11 +2,15 @@ use crate::{Nav2Agent, RclrsExecutorCommands, RclrsNode, RosActionClient};
 use bevy::prelude::*;
 use crossflow::{prelude::*, service::Service};
 use futures::StreamExt;
-use geometry_msgs::msg::{Point, PoseStamped, Quaternion};
 use nalgebra::UnitQuaternion;
-use nav2_msgs::action::{NavigateToPose, NavigateToPose_Feedback, NavigateToPose_Goal};
 use rclrs::*;
-use rmf_prototype_msgs::msg::SafeZoneId;
+use ros_env::{
+    builtin_interfaces::msg::Time as RosTime,
+    geometry_msgs::msg::{Point, Pose, PoseStamped, Quaternion},
+    nav2_msgs::action::{NavigateToPose, NavigateToPose_Feedback, NavigateToPose_Goal},
+    rmf_prototype_msgs::msg::SafeZoneId,
+    std_msgs::msg::Header,
+};
 use std::{future::Future, sync::Arc};
 use thiserror::Error;
 
@@ -287,14 +291,14 @@ fn await_new_requests(
         let quat = UnitQuaternion::from_euler_angles(0.0, 0.0, target.yaw);
 
         let goal_pose = PoseStamped {
-            header: std_msgs::msg::Header {
-                stamp: builtin_interfaces::msg::Time {
+            header: Header {
+                stamp: RosTime {
                     sec: (now.nsec / 1_000_000_000) as i32,
                     nanosec: (now.nsec % 1_000_000_000) as u32,
                 },
                 frame_id: "map".to_string(),
             },
-            pose: geometry_msgs::msg::Pose {
+            pose: Pose {
                 position: Point {
                     x: target.x,
                     y: target.y,

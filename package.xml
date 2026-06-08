@@ -5,6 +5,8 @@
   <maintainer email="xiyuoh@intrinsic.ai">Xiyu Oh</maintainer>
   <license>TODO</license>
 
+  <depend>geometry_msgs</depend>
+  <depend>nav2_msgs</depend>
   <depend>navigation2</depend>
   <depend>rclrs</depend>
   <depend>rmf_prototype_msgs</depend>

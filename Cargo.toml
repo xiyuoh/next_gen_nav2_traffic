@@ -13,6 +13,9 @@ name = "nav2_traffic"
 [package.metadata.ros]
 install_to_share = ["launch"]
 
+[package.metadata.ros-env]
+include = true
+
 [dependencies]
 axum = "0.8"
 bevy = "0.16"
@@ -25,17 +28,10 @@ mapf_post = { git = "https://github.com/arjo129/mapf_post" }
 nalgebra = "0.34"
 rclrs = "0.7"
 reqwest = { version = "0.13", features = ["json", "blocking"] }
+ros-env = "0.1"
 rosidl_runtime_rs = "0.6"
 serde = "1.0"
 serde_json = "1.0"
 thiserror = "2.0"
 tokio = { version = "1.52", features = ["full"] }
 uuid = "1"
-
-builtin_interfaces = "*"
-geometry_msgs = "*"
-nav2_msgs = "*"
-rmf_prototype_msgs = "*"
-std_msgs = "*"
-tf2_msgs = "*"
-unique_identifier_msgs = "*"
