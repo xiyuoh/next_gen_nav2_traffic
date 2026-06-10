@@ -62,7 +62,6 @@ impl Plugin for Nav2TrafficPlugin {
                 InnerNavigationClientPlugin::default(),
                 NavigationServerPlugin::default(),
                 Nav2AgentPlugin::default(),
-                TestingPlugin::default(),
             ));
 
         // Spawn agents last
@@ -147,6 +146,12 @@ pub struct RosPublisher<T: MessageIDL + Debug> {
 impl<T: MessageIDL + Debug> RosPublisher<T> {
     pub fn new(node: &Arc<NodeState>, topic: String) -> Self {
         let publisher = node.create_publisher(&topic).unwrap();
+
+        Self { publisher }
+    }
+
+    pub fn new_transient_local(node: &Arc<NodeState>, topic: String) -> Self {
+        let publisher = node.create_publisher(topic.reliable().transient_local().keep_all()).unwrap();
 
         Self { publisher }
     }
