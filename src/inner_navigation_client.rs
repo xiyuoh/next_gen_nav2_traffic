@@ -328,16 +328,30 @@ fn check_existing_goal(
 ) -> Result<CancelInnerNavigation, InnerNavigationRequest> {
     // TODO(@xiyuoh) Create a replan mechanism instead of cancelling goal on every
     // new request
-    let replan_and_cancel = false;
-    if let Some(existing_goal) = inner_nav_clients
-        .get(request.agent)
-        .ok()
-        .and_then(|inner_client| inner_client.goal().as_ref().map(|goal| goal.client()))
-    {
+    let mut replan_and_cancel = false;
+    if let Some(inner_client) = inner_nav_clients.get(request.agent).ok() {
+        let Some(existing_goal) = inner_client.goal().as_ref() else {
+            return Err(request);
+        };
+
+        // If plan or safe zone version is later, then replan/cancel
+        let curr_safe_zone_id = existing_goal.id();
+        let next_safe_zone_id = &request.safe_zone_id;
+
+        if next_safe_zone_id.plan_id.plan_version > curr_safe_zone_id.plan_id.plan_version {
+            replan_and_cancel = true;
+        } else if next_safe_zone_id.plan_id.plan_version == curr_safe_zone_id.plan_id.plan_version
+            && next_safe_zone_id.safe_zone_version > curr_safe_zone_id.safe_zone_version
+        {
+            replan_and_cancel = true;
+        }
+
+        let client = existing_goal.client();
+
         if replan_and_cancel {
             return Ok(CancelInnerNavigation {
                 request,
-                cancel_client: existing_goal.clone(),
+                cancel_client: client.clone(),
             });
         }
     }
