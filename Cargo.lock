@@ -3969,7 +3969,7 @@ dependencies = [
 [[package]]
 name = "mapf_post"
 version = "0.1.0"
-source = "git+https://github.com/arjo129/mapf_post#e4b715dc7b1576592ef45303d83691014f91e792"
+source = "git+https://github.com/arjo129/mapf_post#b8a33382a97bcf9f14aa7c0194f8faefa03776ea"
 dependencies = [
  "bresenham",
  "clap",
