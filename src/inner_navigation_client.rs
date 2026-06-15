@@ -2,6 +2,7 @@ use crate::{Nav2Agent, RclrsExecutorCommands, RclrsNode, RosActionClient};
 use bevy::prelude::*;
 use crossflow::{prelude::*, service::Service};
 use futures::StreamExt;
+use mapf_post::na::DualQuaternion;
 use nalgebra::UnitQuaternion;
 use rclrs::*;
 use ros_env::{
@@ -225,16 +226,11 @@ impl InnerNavigationServices {
 
             // Handles incoming inner/navigate_to_pose requests - cancels ongoing
             // action goals and sends new action goal.
-            // Upon successful cancellation, trim any downstream nodes.
             let (cancel_goal_fork_result_input, cancel_goal_fork_result) =
                 builder.create_fork_result();
             builder.connect(async_cancel_goal.output, cancel_goal_fork_result_input);
-            let trim = builder.create_trim::<InnerNavigationRequest>(Some(TrimBranch::downstream(
-                async_request_new_goal.input,
-            )));
-            // If current goal successfully canceled, trim any downstream nodes
-            builder.connect(cancel_goal_fork_result.ok, trim.input);
-            builder.connect(trim.output, async_request_new_goal.input);
+
+            builder.connect(cancel_goal_fork_result.ok, async_request_new_goal.input);
             let (new_goal_fork_result_input, new_goal_fork_result) = builder.create_fork_result();
             builder.connect(async_request_new_goal.output, new_goal_fork_result_input);
 
@@ -366,12 +362,18 @@ fn async_cancel_goal(
         .run(async move {
             let cancellation = request.cancel_client.cancellation.cancel().await;
             if cancellation.is_accepted() {
-                return Ok(request.request);
+                info!(
+                    "[{}] Successfully cancelled ongoing goal, requesting new goal",
+                    request.request.agent.index()
+                );
+            } else {
+                info!(
+                    "[{}] Unable to cancel ongoing goal, ignoring and requesting new goal",
+                    request.request.agent.index()
+                );
             }
-            Err(InnerNavigationError {
-                handle: None,
-                kind: InnerNavigationErrorKind::CancelGoalError,
-            })
+            // Regardless of whether cancellation was successful, mark as Ok()
+            Ok(request.request)
         })
         .then(|res| async move {
             res.unwrap_or(Err(InnerNavigationError {

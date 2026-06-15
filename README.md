@@ -14,8 +14,7 @@ graph TD
     AwaitReq -->|stream| CheckGoal[Check Goal]
     
     CheckGoal -->|Ok| CancelGoal[Cancel Goal]
-    CancelGoal -->|Ok| TrimNode[Trim Downstream]
-    TrimNode --> RequestGoal[Request Goal]
+    CancelGoal -->|Ok| RequestGoal
     
     CheckGoal -->|Err| RequestGoal
     
@@ -23,9 +22,12 @@ graph TD
     UpdateGoal --> MonitorGoal[Monitor Navigation]
     MonitorGoal --> RetryNav[Retry Navigation]
 
-    RetryNav -->|Retry| RequestGoal
+    RetryNav -->|Ok| RequestGoal
     RetryNav -->|Err| CleanupGoal[Cleanup Goal Client]
     
+    CancelGoal -->|Err| LogError[Log Error]
+    RequestGoal -->|Err| LogError
+
     AwaitReq -->|output| Terminate([scope.terminate])
 ```
 
@@ -34,12 +36,12 @@ graph TD
 - **`await_new_requests`**: A continuous service that listens for `InnerNavigationTarget` events and streams `InnerNavigationRequest` objects.
 - **`check_existing_goal`**: Checks if the agent already has an active goal. If so, it proceeds to cancel it; otherwise, it requests a new goal.
 - **`async_cancel_goal`**: An asynchronous service that cancels the existing Nav2 goal.
-- **`Trim Downstream`**: If the cancellation is successful, this node trims downstream operations to avoid conflicts before requesting a new goal.
 - **`async_request_new_goal`**: An asynchronous service that sends a new `NavigateToPose` goal to Nav2.
 - **`update_goal_client`**: Updates the `InnerNavigationClient` component with the new goal handle.
 - **`async_monitor_ongoing_navigation`**: Monitors the progress of the navigation goal, handling feedback and final results (Succeeded, Aborted, Cancelled).
 - **`retry_navigation`**: A map block that decides whether to retry the navigation if it was aborted.
 - **`cleanup_goal_client`**: Cleans up the goal client state in the component upon completion or failure.
+- **`log_inner_navigation_error`**: Logs any errors encountered during goal cancellation or request.
 
 
 # NavigationServices Workflow Diagram
