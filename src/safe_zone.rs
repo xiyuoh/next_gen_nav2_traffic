@@ -1,5 +1,5 @@
 use crate::{
-    inner_navigation_client::InnerNavigationTarget, Nav2Agent, RclrsNode, RosPublisher,
+    inner_navigation_client::InnerNavigationTarget, safe_zone, Nav2Agent, RclrsNode, RosPublisher,
     RosSubscription,
 };
 use bevy::prelude::*;
@@ -38,6 +38,42 @@ impl CurrentSafeZone {
 
     pub fn matches(&self, other: &SafeZone) -> bool {
         self.as_ref().is_some_and(|sz| sz.id == other.id)
+    }
+
+    pub fn distancesq_to_target(&self, other: &SafeZone) -> f64 {
+        let Some(safe_zone) = self.0.clone() else {
+            // TODO(arjoc): Clean up lifetimes
+            return f64::INFINITY;
+        };
+
+        let Some((sx, sy)) = Self::get_point(&safe_zone) else {
+            return f64::INFINITY;
+        };
+
+        let Some((dx, dy)) = Self::get_point(other) else {
+            return f64::INFINITY;
+        };
+
+        (sx - dx).powi(2) + (sy - dy).powi(2)
+    }
+
+    fn get_point(safe_zone: &SafeZone) -> Option<(f64, f64)> {
+        let Some(region) = safe_zone.incremental_target.regions.first() else {
+            return None;
+        };
+        match region.region.hint {
+            Region::HINT_POINT => {
+                if region.region.points.len() != 2 {
+                    None
+                } else {
+                    Some((
+                        region.region.points[0].into(),
+                        region.region.points[1].into(),
+                    ))
+                }
+            }
+            _ => None,
+        }
     }
 }
 
@@ -129,20 +165,22 @@ fn update_incremental_target(
         let Some(safe_zone) = safe_zone_sub.subscriber.data_callback() else {
             continue;
         };
-        if current_safe_zone.matches(&safe_zone) {
-            continue;
-        }
-        // Validate safe zone msg
-        if !is_valid(&safe_zone) {
-            continue;
-        }
-        let Some((target_x, target_y, target_yaw)) = next_target(&safe_zone) else {
-            continue;
-        };
+        //if current_safe_zone.matches(&safe_zone) {
+        //    continue;
+        //}
 
         // Call updateCosts() before setting new inner nav target
         let Ok(_) = costmap_pub.publisher.publish(safe_zone.costmap.clone()) else {
             error!("Failed to publish costmap for agent [{}]", agent.name);
+            continue;
+        };
+
+        // Validate safe zone msg
+        if !is_valid(&safe_zone) {
+            continue;
+        }
+
+        let Some((target_x, target_y, target_yaw)) = next_target(&safe_zone) else {
             continue;
         };
 
@@ -158,7 +196,12 @@ fn update_incremental_target(
             continue;
         };
 
+        if current_safe_zone.distancesq_to_target(&safe_zone) < 0.5 {
+            continue;
+        }
+
         *current_safe_zone = CurrentSafeZone(Some(safe_zone.clone()));
+
         nav_target.write(InnerNavigationTarget::new(
             e,
             safe_zone.id,
