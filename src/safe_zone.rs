@@ -1,6 +1,6 @@
 use crate::{
-    inner_navigation_client::InnerNavigationTarget, safe_zone, Nav2Agent, RclrsNode, RosPublisher,
-    RosSubscription,
+    inner_navigation_client::InnerNavigationTarget, navigation_server::CurrentNavigationRequest,
+    Nav2Agent, RclrsNode, RosPublisher, RosSubscription,
 };
 use bevy::prelude::*;
 use ros_env::{
@@ -146,22 +146,23 @@ fn create_progress_publisher(
 
 fn update_incremental_target(
     mut nav_target: EventWriter<InnerNavigationTarget>,
-    mut subscriptions: Query<(
-        Entity,
-        &SafeZoneSubscription,
-        &CostmapPublisher,
-        &ProgressPublisher,
-        &mut CurrentSafeZone,
-        &Nav2Agent,
-    )>,
+    mut subscriptions: Query<
+        (
+            Entity,
+            &SafeZoneSubscription,
+            &CostmapPublisher,
+            &ProgressPublisher,
+            &mut CurrentSafeZone,
+            &Nav2Agent,
+        ),
+        // Only respond to a SafeZone message if there is an active NavigationRequest
+        // for this agent
+        With<CurrentNavigationRequest>,
+    >,
 ) {
     for (e, safe_zone_sub, costmap_pub, progress_pub, mut current_safe_zone, agent) in
         subscriptions.iter_mut()
     {
-        // TODO(@xiyuoh) currently we're responding to every incoming SafeZone
-        // message, regardless of whether there is an ongoing NavigationRequest
-        // to ~/navigate_to_pose. Review whether this should be filtered.
-
         let Some(safe_zone) = safe_zone_sub.subscriber.data_callback() else {
             continue;
         };

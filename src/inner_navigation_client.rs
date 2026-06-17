@@ -1,4 +1,4 @@
-use crate::{Nav2Agent, RclrsExecutorCommands, RclrsNode, RosActionClient};
+use crate::{Nav2Agent, NavigateToPoseServer, RclrsExecutorCommands, RclrsNode, RosActionClient};
 use bevy::prelude::*;
 use crossflow::{prelude::*, service::Service};
 use futures::StreamExt;
@@ -99,6 +99,7 @@ impl Plugin for InnerNavigationClientPlugin {
     fn build(&self, app: &mut App) {
         app.add_event::<InnerNavigationTarget>()
             .add_event::<InnerNavigationFeedback>()
+            .add_event::<CancelInnerForAgent>()
             .add_observer(create_inner_navigation_client);
 
         // Initialize Navigation services
@@ -150,7 +151,8 @@ struct CurrentInnerNavigationGoal {
 
 #[derive(Clone)]
 struct CancelInnerNavigation {
-    request: InnerNavigationRequest,
+    agent: Entity,
+    new_request: Option<InnerNavigationRequest>,
     cancel_client: GoalClient<NavigateToPose>,
 }
 
@@ -179,6 +181,11 @@ enum InnerNavigationErrorKind {
     UnknownError,
 }
 
+#[derive(Clone, Debug, Event)]
+pub struct CancelInnerForAgent {
+    pub agent: Entity,
+}
+
 type InnerNavigationResult = Result<InnerNavigationSuccess, InnerNavigationError>;
 
 #[derive(Resource)]
@@ -189,19 +196,26 @@ pub struct InnerNavigationServices {
 impl InnerNavigationServices {
     pub fn from_app(app: &mut App) -> Self {
         let await_new_requests_service = app.spawn_continuous_service(Update, await_new_requests);
+        let await_external_cancellation_service =
+            app.spawn_continuous_service(Update, await_external_cancellation);
         let check_existing_goal_service = app.spawn_service(check_existing_goal);
         let async_cancel_goal_service = app.spawn_service(async_cancel_goal);
         let async_request_new_goal_service = app.spawn_service(async_request_new_goal);
         let update_goal_client_service = app.spawn_service(update_goal_client);
         let async_monitor_ongoing_navigation_service =
             app.spawn_service(async_monitor_ongoing_navigation);
+        let process_navigation_result_service = app.spawn_service(process_navigation_result);
         let cleanup_goal_client_service = app.spawn_service(cleanup_goal_client);
         let log_error_service = app.spawn_service(log_inner_navigation_error);
 
         let await_and_send_goal = app.world_mut().spawn_workflow(|scope, builder| {
-            let await_requests = builder
-                .chain(scope.start)
+            let fork_input = scope.start.fork_clone(builder);
+            let await_requests = fork_input
+                .clone_chain(builder)
                 .then_node(await_new_requests_service);
+            let await_external_cancellation = fork_input
+                .clone_chain(builder)
+                .then_node(await_external_cancellation_service);
 
             // Create nodes
             let check_existing_goal = builder.create_node(check_existing_goal_service);
@@ -210,11 +224,15 @@ impl InnerNavigationServices {
             let update_goal_client = builder.create_node(update_goal_client_service);
             let async_monitor_new_navigation_request =
                 builder.create_node(async_monitor_ongoing_navigation_service);
+            let post_nav_processing = builder.create_node(process_navigation_result_service);
             let cleanup_goal_client = builder.create_node(cleanup_goal_client_service);
             let log_error = builder.create_node(log_error_service);
 
             // Stream out new requests to downstream nodes
             builder.connect(await_requests.streams, check_existing_goal.input);
+
+            // Stream out external cancellation requests to downstream nodes
+            builder.connect(await_external_cancellation.streams, async_cancel_goal.input);
 
             // Check if there is an existing goal client; if so, connect to
             // cancellation node, else request new goal
@@ -241,16 +259,20 @@ impl InnerNavigationServices {
                 async_monitor_new_navigation_request.input,
             );
 
-            // On completed navigation request, check if goal was aborted and if yes retry
-            let retry_nav =
-                builder.create_map_block(|res: InnerNavigationResult| retry_navigation(res));
-            builder.connect(async_monitor_new_navigation_request.output, retry_nav.input);
-            let (retry_fork_result_input, retry_fork_result) = builder.create_fork_result();
-            builder.connect(retry_nav.output, retry_fork_result_input);
-            builder.connect(retry_fork_result.ok, async_request_new_goal.input);
-
-            // If not, cleanup goal client
-            builder.connect(retry_fork_result.err, cleanup_goal_client.input);
+            // On completed navigation request, check goal status code and process accordingly
+            // Aborted -> retry, Cancelled -> publish cancellation to outer workflow, Succeeded -> do nothing
+            // Then connect to cleanup existing goal client data
+            builder.connect(
+                async_monitor_new_navigation_request.output,
+                post_nav_processing.input,
+            );
+            let (post_nav_fork_result_input, post_nav_fork_result) = builder.create_fork_result();
+            builder.connect(post_nav_processing.output, post_nav_fork_result_input);
+            // If goal was aborted, retry navigation by requesting new goal
+            // Goal client will be updated in a downstream node
+            builder.connect(post_nav_fork_result.ok, async_request_new_goal.input);
+            // Otherwise, cleanup goal client
+            builder.connect(post_nav_fork_result.err, cleanup_goal_client.input);
 
             // Connect errors to logging node
             builder.connect(cancel_goal_fork_result.err, log_error.input);
@@ -311,10 +333,52 @@ fn await_new_requests(
         let pending_request = InnerNavigationRequest {
             agent: target.agent,
             safe_zone_id: target.safe_zone_id.clone(),
-            target_pose: goal_pose,
+            target_pose: goal_pose.clone(),
         };
+        info!(
+            "[{:?}] Requesting new pending goal to pose [{}, {}]",
+            target.agent.index(),
+            goal_pose.pose.position.x,
+            goal_pose.pose.position.y
+        );
 
         orders.for_each(|order| order.streams().send(pending_request.clone()));
+    }
+}
+
+fn await_external_cancellation(
+    srv: ContinuousService<(), (), StreamOf<CancelInnerNavigation>>,
+    mut orders: ContinuousQuery<(), (), StreamOf<CancelInnerNavigation>>,
+    mut cancel_requests: EventReader<CancelInnerForAgent>,
+    inner_nav_clients: Query<&InnerNavigationClient>,
+) {
+    let Some(mut orders) = orders.get_mut(&srv.key) else {
+        return;
+    };
+    if orders.is_empty() {
+        return;
+    }
+
+    for request in cancel_requests.read() {
+        info!(
+            "Received external cancellation request for agent {:?}",
+            request.agent.index()
+        );
+        let Some(existing_goal) = inner_nav_clients
+            .get(request.agent)
+            .ok()
+            .and_then(|inner_client| inner_client.goal().as_ref())
+        else {
+            continue;
+        };
+        let client = existing_goal.client();
+        orders.for_each(|order| {
+            order.streams().send(CancelInnerNavigation {
+                agent: request.agent,
+                new_request: None,
+                cancel_client: client.clone(),
+            })
+        });
     }
 }
 
@@ -325,55 +389,77 @@ fn check_existing_goal(
     // TODO(@xiyuoh) Create a replan mechanism instead of cancelling goal on every
     // new request
     let mut replan_and_cancel = false;
-    if let Some(inner_client) = inner_nav_clients.get(request.agent).ok() {
-        let Some(existing_goal) = inner_client.goal().as_ref() else {
-            return Err(request);
-        };
+    let Some(existing_goal) = inner_nav_clients
+        .get(request.agent)
+        .ok()
+        .and_then(|inner_client| inner_client.goal().as_ref())
+    else {
+        return Err(request);
+    };
 
-        // If plan or safe zone version is later, then replan/cancel
-        let curr_safe_zone_id = existing_goal.id();
-        let next_safe_zone_id = &request.safe_zone_id;
+    // If plan or safe zone version is later, then replan/cancel
+    let curr_safe_zone_id = existing_goal.id();
+    let next_safe_zone_id = &request.safe_zone_id;
 
-        if next_safe_zone_id.plan_id.plan_version > curr_safe_zone_id.plan_id.plan_version {
-            replan_and_cancel = true;
-        } else if next_safe_zone_id.plan_id.plan_version == curr_safe_zone_id.plan_id.plan_version
-            && next_safe_zone_id.safe_zone_version > curr_safe_zone_id.safe_zone_version
-        {
-            replan_and_cancel = true;
-        }
-
-        let client = existing_goal.client();
-
-        if replan_and_cancel {
-            return Ok(CancelInnerNavigation {
-                request,
-                cancel_client: client.clone(),
-            });
-        }
+    if next_safe_zone_id.plan_id.plan_version > curr_safe_zone_id.plan_id.plan_version {
+        replan_and_cancel = true;
+    } else if next_safe_zone_id.plan_id.plan_version == curr_safe_zone_id.plan_id.plan_version
+        && next_safe_zone_id.safe_zone_version > curr_safe_zone_id.safe_zone_version
+    {
+        replan_and_cancel = true;
     }
+
+    let client = existing_goal.client();
+
+    if replan_and_cancel {
+        return Ok(CancelInnerNavigation {
+            agent: request.agent,
+            new_request: Some(request),
+            cancel_client: client.clone(),
+        });
+    }
+
     return Err(request);
+}
+
+#[derive(Clone, Debug, Component)]
+pub struct CancellingInnerNavigation {
+    pub success: bool,
 }
 
 fn async_cancel_goal(
     Async { request, .. }: Async<CancelInnerNavigation>,
+    mut commands: Commands,
     executor_commands: Res<RclrsExecutorCommands>,
 ) -> impl Future<Output = Result<InnerNavigationRequest, InnerNavigationError>> {
+    commands
+        .entity(request.agent)
+        .insert(CancellingInnerNavigation { success: false });
     executor_commands
         .run(async move {
-            let cancellation = request.cancel_client.cancellation.cancel().await;
-            if cancellation.is_accepted() {
-                info!(
-                    "[{}] Successfully cancelled ongoing goal, requesting new goal",
-                    request.request.agent.index()
-                );
+            let mut cancellation = request.cancel_client.cancellation.cancel().await;
+            if let Some(new_request) = request.new_request {
+                // If this a replan attempt with a new navigation request,
+                // regardless of whether cancellation was successful, mark as Ok()
+                return Ok(new_request);
             } else {
+                // If this is an external cancellation attempt, persist until it is accepted
+                while !cancellation.is_accepted() {
+                    info!(
+                        "[{}] Cancellation request rejected for inner navigation, retrying...",
+                        request.agent.index()
+                    );
+                    cancellation = request.cancel_client.cancellation.cancel().await;
+                }
                 info!(
-                    "[{}] Unable to cancel ongoing goal, ignoring and requesting new goal",
-                    request.request.agent.index()
+                    "[{}] Cancellation request rejected for inner navigation, requesting new goal",
+                    request.agent.index()
                 );
+                return Err(InnerNavigationError {
+                    handle: None,
+                    kind: InnerNavigationErrorKind::CancelGoalError,
+                });
             }
-            // Regardless of whether cancellation was successful, mark as Ok()
-            Ok(request.request)
         })
         .then(|res| async move {
             res.unwrap_or(Err(InnerNavigationError {
@@ -402,8 +488,8 @@ fn async_request_new_goal(
     inner_nav_client.reset_goal();
 
     let mut pose = request.target_pose.clone();
-    info!(
-        "[{:?}] Requesting new goal to pose [{}, {}]",
+    debug!(
+        "[{:?}] Requesting new navigation goal to pose [{}, {}]",
         request.agent.index(),
         pose.pose.position.x,
         pose.pose.position.y
@@ -494,14 +580,14 @@ fn async_monitor_ongoing_navigation(
                         });
                     }
                     GoalEvent::Status(s) => {
-                        info!(
+                        debug!(
                             "[{:?}] [inner nav2pose] Status: {:?}",
                             handle.request.agent.index(),
                             s.code
                         );
                     }
                     GoalEvent::Result((status, result)) => {
-                        info!(
+                        debug!(
                             "[{:?}] [inner nav2pose] Result: {:?}",
                             handle.request.agent.index(),
                             result
@@ -520,7 +606,7 @@ fn async_monitor_ongoing_navigation(
                                 return Err(InnerNavigationError {
                                     handle: Some(handle.clone()),
                                     kind: InnerNavigationErrorKind::GoalCancelledError,
-                                })
+                                });
                             }
                             _ => {}
                         }
@@ -540,27 +626,44 @@ fn async_monitor_ongoing_navigation(
         })
 }
 
-fn retry_navigation(
-    result: InnerNavigationResult,
+// If navigation was aborted, retry
+// If navigation was cancelled (not cancelling), publish cancellation to outer workflow
+fn process_navigation_result(
+    Blocking {
+        request: result, ..
+    }: Blocking<InnerNavigationResult>,
+    mut commands: Commands,
 ) -> Result<InnerNavigationRequest, InnerNavigationResult> {
     match result {
         Ok(_) => return Err(result),
-        Err(ref err) => {
-            if matches!(err.kind, InnerNavigationErrorKind::GoalAbortedError) {
+        Err(ref err) => match err.kind {
+            InnerNavigationErrorKind::GoalAbortedError => {
                 let Some(ref handle) = err.handle else {
                     return Err(result);
                 };
                 let target = &handle.request;
                 let target_pose = target.target_pose.clone();
 
-                info!("[{:?}] Goal aborted. Retrying", target.agent.index());
+                debug!("[{:?}] Goal aborted. Retrying", target.agent.index());
                 return Ok(InnerNavigationRequest {
                     agent: target.agent,
                     safe_zone_id: target.safe_zone_id.clone(),
                     target_pose,
                 });
             }
-        }
+            InnerNavigationErrorKind::GoalCancelledError => {
+                if let Some(agent) = err.handle.as_ref().map(|h| h.request.agent) {
+                    info!(
+                        "[{:?}] Goal cancelled. Publishing complete cancellation to outer workflow",
+                        agent.index()
+                    );
+                    commands
+                        .entity(agent)
+                        .insert(CancellingInnerNavigation { success: true });
+                }
+            }
+            _ => {}
+        },
     }
     return Err(result);
 }

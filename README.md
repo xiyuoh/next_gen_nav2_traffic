@@ -9,21 +9,25 @@ This document describes the workflow in `InnerNavigationServices`, specifically 
 
 ```mermaid
 graph TD
-    Start([scope.start]) --> AwaitReq[Await Requests]
+    Start([scope.start]) --> ForkClone{Fork Clone}
     
+    ForkClone --> AwaitReq[Await Requests]
+    ForkClone --> AwaitExtCancel[Await External Cancellation]
+    
+    AwaitExtCancel -->|stream| CancelGoal[Cancel Goal]
     AwaitReq -->|stream| CheckGoal[Check Goal]
     
-    CheckGoal -->|Ok| CancelGoal[Cancel Goal]
-    CancelGoal -->|Ok| RequestGoal
+    CheckGoal -->|Ok| CancelGoal
+    CancelGoal -->|Ok| RequestGoal[Request Goal]
     
     CheckGoal -->|Err| RequestGoal
     
     RequestGoal -->|Ok| UpdateGoal[Update Goal Client]
     UpdateGoal --> MonitorGoal[Monitor Navigation]
-    MonitorGoal --> RetryNav[Retry Navigation]
+    MonitorGoal --> ProcessNav[Process Navigation Result]
 
-    RetryNav -->|Ok| RequestGoal
-    RetryNav -->|Err| CleanupGoal[Cleanup Goal Client]
+    ProcessNav -->|Ok| RequestGoal
+    ProcessNav -->|Err| CleanupGoal[Cleanup Goal Client]
     
     CancelGoal -->|Err| LogError[Log Error]
     RequestGoal -->|Err| LogError
@@ -34,12 +38,13 @@ graph TD
 ## Node Descriptions
 
 - **`await_new_requests`**: A continuous service that listens for `InnerNavigationTarget` events and streams `InnerNavigationRequest` objects.
+- **`await_external_cancellation`**: A continuous service that listens for `CancelInnerForAgent` events and streams cancellation requests.
 - **`check_existing_goal`**: Checks if the agent already has an active goal. If so, it proceeds to cancel it; otherwise, it requests a new goal.
 - **`async_cancel_goal`**: An asynchronous service that cancels the existing Nav2 goal.
 - **`async_request_new_goal`**: An asynchronous service that sends a new `NavigateToPose` goal to Nav2.
 - **`update_goal_client`**: Updates the `InnerNavigationClient` component with the new goal handle.
 - **`async_monitor_ongoing_navigation`**: Monitors the progress of the navigation goal, handling feedback and final results (Succeeded, Aborted, Cancelled).
-- **`retry_navigation`**: A map block that decides whether to retry the navigation if it was aborted.
+- **`process_navigation_result`**: Processes the final result of the navigation request. If aborted, it prepares to retry by requesting a new goal; otherwise, it passes the result for cleanup.
 - **`cleanup_goal_client`**: Cleans up the goal client state in the component upon completion or failure.
 - **`log_inner_navigation_error`**: Logs any errors encountered during goal cancellation or request.
 
