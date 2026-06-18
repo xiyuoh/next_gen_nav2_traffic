@@ -10,6 +10,7 @@
   <depend>navigation2</depend>
   <depend>rclrs</depend>
   <depend>rmf_prototype_msgs</depend>
+  <depend>spatio_temporal_partition_layer</depend>
   <depend>std_msgs</depend>
 
   <export>

@@ -28,7 +28,9 @@ fn create_destination_goal_publisher(
         return;
     };
     let topic = agent_name + "/destination/goal";
-    let publisher = Arc::new(RosPublisher::<DestinationGoal>::new(&node, topic));
+    let publisher = Arc::new(RosPublisher::<DestinationGoal>::new_transient_local(
+        &node, topic,
+    ));
     commands.entity(e).insert(DestinationGoalPublisher {
         publisher: Arc::clone(&publisher),
     });

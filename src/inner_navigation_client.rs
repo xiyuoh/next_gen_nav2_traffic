@@ -432,9 +432,11 @@ fn async_cancel_goal(
     mut commands: Commands,
     executor_commands: Res<RclrsExecutorCommands>,
 ) -> impl Future<Output = Result<InnerNavigationRequest, InnerNavigationError>> {
-    commands
-        .entity(request.agent)
-        .insert(CancellingInnerNavigation { success: false });
+    if request.new_request.is_none() {
+        commands
+            .entity(request.agent)
+            .insert(CancellingInnerNavigation { success: false });
+    }
     executor_commands
         .run(async move {
             let mut cancellation = request.cancel_client.cancellation.cancel().await;
@@ -633,6 +635,7 @@ fn process_navigation_result(
         request: result, ..
     }: Blocking<InnerNavigationResult>,
     mut commands: Commands,
+    mut cancelling_inner: Query<&mut CancellingInnerNavigation>,
 ) -> Result<InnerNavigationRequest, InnerNavigationResult> {
     match result {
         Ok(_) => return Err(result),
@@ -652,14 +655,16 @@ fn process_navigation_result(
                 });
             }
             InnerNavigationErrorKind::GoalCancelledError => {
+                // Only mark cancellation success for external cancellation
+                // and not for replan attempts
                 if let Some(agent) = err.handle.as_ref().map(|h| h.request.agent) {
-                    info!(
-                        "[{:?}] Goal cancelled. Publishing complete cancellation to outer workflow",
-                        agent.index()
-                    );
-                    commands
-                        .entity(agent)
-                        .insert(CancellingInnerNavigation { success: true });
+                    if let Ok(mut cancelling) = cancelling_inner.get_mut(agent) {
+                        info!(
+                            "[{:?}] Goal cancelled. Marking cancellation as success.",
+                            agent.index()
+                        );
+                        cancelling.success = true;
+                    }
                 }
             }
             _ => {}

@@ -106,7 +106,7 @@ vcs import src < src/next_gen_nav2_traffic/nav2_traffic.repos
 
 Build
 ```
-colcon build --packages-up-to sp_demo_nav2_bringup demo_world spatio_temporal_partition_layer next_gen_nav2_traffic rmf_prototype_msgs rmf_participant_discovery rmf_path_server rmf_plan_executor rmf_mock_robot_sim rmf_path_server_demo rmf_path_server_test rmf_simple_destination_server
+colcon build --packages-up-to sp_demo_nav2_bringup next_gen_nav2_traffic rmf_path_server_demo rmf_path_server_test
 ```
 
 ### Run
@@ -154,7 +154,7 @@ ros2 action send_goal robot1/navigate_to_pose nav2_msgs/action/NavigateToPose "{
       frame_id: 'map'
     },
     pose: {
-      position: {x: 8.0, y: 5.0, z: 0.0},
+      position: {x: 0.0, y: 3.0, z: 0.0},
       orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
     }
   }
