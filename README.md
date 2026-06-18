@@ -123,9 +123,9 @@ In a separate terminal, spin up the Nav2 traffic node:
 ros2 run next_gen_nav2_traffic nav2_traffic --ros-args -p use_sim_time:=true
 ```
 
-Run the demo launch file containing the path server, plan executor, and destination server:
+Run the demo launch file containing the path server, plan executor, destination server, and path visualizer nodes:
 ```
-ros2 launch rmf_path_server_demo demo.launch.py
+ros2 launch rmf_path_server_demo demo.launch.py robots:="robot0 robot1"
 ```
 
 Send action goals to the robots:
@@ -160,4 +160,36 @@ ros2 action send_goal robot1/navigate_to_pose nav2_msgs/action/NavigateToPose "{
   }
 }"
 
+```
+
+Alternate navigation goals:
+
+```
+ros2 action send_goal robot0/navigate_to_pose nav2_msgs/action/NavigateToPose "{
+  pose: {
+    header: {
+      stamp: {sec: 0, nanosec: 0},
+      frame_id: 'map'
+    },
+    pose: {
+      position: {x: 9.0, y: 3.0, z: 0.0},
+      orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
+    }
+  }
+}" --feedback
+```
+
+```
+ros2 action send_goal robot1/navigate_to_pose nav2_msgs/action/NavigateToPose "{
+  pose: {
+    header: {
+      stamp: {sec: 0, nanosec: 0},
+      frame_id: 'map'
+    },
+    pose: {
+      position: {x: 9.0, y: 6.0, z: 0.0},
+      orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
+    }
+  }
+}" --feedback
 ```

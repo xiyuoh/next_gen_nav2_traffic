@@ -10,7 +10,7 @@ repositories:
   next_gen_prototype:
     type: git
     url: https://github.com/xiyuoh/next_gen_prototype.git
-    version: xiyu/connect_everything
+    version: xiyu/testing
   rmf_building_map_msgs:
     type: git
     url: https://github.com/open-rmf/rmf_building_map_msgs.git
